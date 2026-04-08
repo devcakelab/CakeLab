@@ -1,0 +1,535 @@
+{% extends "base.html" %}
+
+{% set page_title = "Dashboard - CakeLab" %}
+{% set show_nav = true %}
+{% set active_page = "dashboard" %}
+
+{% block content %}
+<style>
+    .dashv2 {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+    .dashv2-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        align-items: flex-start;
+    }
+    .dashv2-header h1 {
+        margin: 0;
+        font-size: 42px;
+        line-height: 1;
+    }
+    .dashv2-header p {
+        margin: 4px 0 0;
+        font-size: 18px;
+    }
+    .dashv2-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .dashv2-actions button {
+        width: auto;
+        margin: 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #f8fafc;
+        color: #334155;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .dashv2-grid {
+        display: grid;
+        grid-template-columns: 1.05fr 1fr;
+        gap: 14px;
+    }
+    .dashv2-left,
+    .dashv2-right {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+    .dashv2-kpis {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+    .kpi-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 14px 16px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+    .kpi-card h3 {
+        margin: 0 0 10px;
+        font-size: 17px;
+        color: #0f172a;
+    }
+    .kpi-card .kpi-value {
+        margin: 0;
+        font-size: 34px;
+        line-height: 1.1;
+        font-weight: 700;
+        color: #111827;
+    }
+    .kpi-card small {
+        color: #6b7280;
+        font-size: 12px;
+    }
+    .dashv2-panel {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 14px 16px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+    .best-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+    }
+    .best-header h2 {
+        margin: 0;
+        font-size: 39px;
+        line-height: 0.95;
+        max-width: 230px;
+    }
+    .best-header a {
+        color: #334155;
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    .best-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+    }
+    .best-item {
+        border-radius: 12px;
+        border: 1px solid #d8e0ea;
+        min-height: 124px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        justify-content: center;
+        background: linear-gradient(145deg, #f9f5ef, #e8eef9);
+        color: #475569;
+        font-size: 13px;
+        font-weight: 600;
+        text-align: center;
+    }
+    .best-item .best-icon {
+        font-size: 30px;
+        line-height: 1;
+        margin-bottom: 8px;
+    }
+    .best-item .best-name {
+        line-height: 1.2;
+    }
+    .dashv2-chart h3 {
+        margin: 0 0 10px;
+        text-align: center;
+        font-size: 16px;
+    }
+    .line-chart {
+        position: relative;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        height: 210px;
+        background:
+            linear-gradient(to top, transparent 24%, #eef2f7 25%, transparent 26%) 0 0 / 100% 42px,
+            #fbfcfe;
+        overflow: hidden;
+    }
+    .line-svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+    }
+    .line-plot {
+        fill: none;
+        stroke: #2f5bad;
+        stroke-width: 3;
+    }
+    .line-point {
+        fill: #2f5bad;
+    }
+    .line-axis {
+        margin: 7px 4px 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        text-align: center;
+        color: #6b7280;
+        font-size: 12px;
+    }
+    .monthly-chart-wrap {
+        height: 228px;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        background:
+            linear-gradient(to top, transparent 24%, #eef2f7 25%, transparent 26%) 0 0 / 100% 45px,
+            #fbfcfe;
+        padding: 8px 10px;
+    }
+    .monthly-svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+    }
+    .bar-rect {
+        fill: #2f5bad;
+    }
+    .bar-axis {
+        stroke: #9aa6bd;
+        stroke-width: 1.2;
+    }
+    .bar-label {
+        fill: #5b677a;
+        font-size: 12px;
+        font-weight: 500;
+        text-anchor: middle;
+    }
+    .bar-value {
+        fill: #223552;
+        font-size: 12px;
+        font-weight: 700;
+        text-anchor: middle;
+    }
+    .monthly-footnote {
+        margin: 8px 0 0;
+        text-align: center;
+        color: #4b5a71;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .low-stock-table {
+        margin-top: 12px;
+    }
+    .low-stock-table.hidden {
+        display: none;
+    }
+    .low-stock-table h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+    }
+    @media (max-width: 1020px) {
+        .dashv2-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    @media (max-width: 760px) {
+        .dashv2-header h1 {
+            font-size: 32px;
+        }
+        .dashv2-kpis {
+            grid-template-columns: 1fr;
+        }
+        .best-header h2 {
+            font-size: 31px;
+        }
+    }
+</style>
+
+<section class="dashv2">
+    <header class="dashv2-header">
+        <div>
+            <h1>Dashboard</h1>
+            <p>Overview</p>
+        </div>
+        <div class="dashv2-actions">
+            <button type="button" id="btn-refresh">Refresh &#x21bb;</button>
+            <button type="button" id="btn-edit">Edit &#9881;</button>
+            <button type="button" id="btn-filter">Filter &#9776;</button>
+            <button type="button" id="btn-export">Export &#11015;</button>
+        </div>
+    </header>
+
+    <div class="dashv2-grid">
+        <div class="dashv2-left">
+            <div class="dashv2-kpis">
+                <article class="kpi-card">
+                    <h3>Today's Sales</h3>
+                    <p class="kpi-value"><span id="kpi-sales">{{ stats.today_sales }}</span></p>
+                    <small>Updated at 7:00 PM</small>
+                </article>
+                <article class="kpi-card">
+                    <h3>This Month's Sales</h3>
+                    <p class="kpi-value">PHP <span id="kpi-month">{{ "%.2f"|format(stats.this_month_revenue) }}</span></p>
+                    <small>Current month actual revenue</small>
+                </article>
+                <article class="kpi-card">
+                    <h3>Total Products</h3>
+                    <p class="kpi-value"><span id="kpi-products">{{ stats.total_products }}</span></p>
+                    <small>Live count from inventory</small>
+                </article>
+                <article class="kpi-card">
+                    <h3>Low Stock Alerts</h3>
+                    <p class="kpi-value"><span id="kpi-lowstock">{{ stats.low_stock_count }}</span></p>
+                    <small>Needs restocking soon</small>
+                </article>
+            </div>
+
+            <article class="dashv2-panel">
+                <div class="best-header">
+                    <h2>Top 3 Best Sellers</h2>
+                    <a href="{{ url_for('sales_page') }}">View Details &#8250;</a>
+                </div>
+                <div class="best-grid" id="best-sellers-grid">
+                    {% for item in insights.top_sellers %}
+                    <div class="best-item">
+                        <span class="best-icon">{{ item.icon }}</span>
+                        <span class="best-name">{{ item.name }}</span>
+                    </div>
+                    {% endfor %}
+                    {% for _ in range(3 - (insights.top_sellers|length)) %}
+                    <div class="best-item">
+                        <span class="best-icon">🧁</span>
+                        <span class="best-name">No sales yet</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </article>
+        </div>
+
+        <div class="dashv2-right">
+            <article class="dashv2-panel dashv2-chart">
+                <h3>February Daily Sales 2026</h3>
+                <div class="line-chart">
+                    <svg class="line-svg" id="weekly-line-chart" viewBox="0 0 500 200" preserveAspectRatio="none"></svg>
+                </div>
+                <ul class="line-axis" id="weekly-axis">
+                    <li>Week 1</li>
+                    <li>Week 2</li>
+                    <li>Week 3</li>
+                    <li>Week 4</li>
+                    <li>Week 5</li>
+                </ul>
+            </article>
+
+            <article class="dashv2-panel dashv2-chart">
+                <h3>2026 Monthly Sales</h3>
+                <div class="monthly-chart-wrap">
+                    <svg id="monthly-bar-chart" class="monthly-svg" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
+                </div>
+                <p class="monthly-footnote" id="monthly-summary">Total for last 3 months: PHP 0.00</p>
+            </article>
+        </div>
+    </div>
+
+    {% if low_stock %}
+    <article class="dashv2-panel low-stock-table">
+        <h3>Low Stock Alerts</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>SKU</th>
+                    <th>Name</th>
+                    <th>Stock</th>
+                    <th>Threshold</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in low_stock %}
+                <tr>
+                    <td>{{ p.sku }}</td>
+                    <td>{{ p.name }}</td>
+                    <td>{{ p.stock }}</td>
+                    <td>{{ p.low_stock_threshold }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </article>
+    {% else %}
+    <div class="message success">No low-stock items right now.</div>
+    {% endif %}
+</section>
+
+<script>
+const initialDashboardData = {{ {"stats": stats, "insights": insights}|tojson }};
+let currentDashboardData = initialDashboardData;
+let lowStockOnly = false;
+
+function renderTopSellers(topSellers) {
+    const grid = document.getElementById("best-sellers-grid");
+    if (!grid) return;
+    grid.innerHTML = "";
+    const items = topSellers.slice(0, 3).map((item) => ({
+        icon: item.icon || "🧁",
+        name: item.name || "Unknown",
+    }));
+    while (items.length < 3) items.push({ icon: "🧁", name: "No sales yet" });
+    for (const item of items) {
+        const div = document.createElement("div");
+        div.className = "best-item";
+        div.innerHTML = `<span class="best-icon">${item.icon}</span><span class="best-name">${item.name}</span>`;
+        grid.appendChild(div);
+    }
+}
+
+function renderMonthlyBars(monthly) {
+    const svg = document.getElementById("monthly-bar-chart");
+    if (!svg) return;
+
+    const safe = monthly.slice(0, 3);
+    while (safe.length < 3) safe.push({ label: "-", value: 0 });
+    const maxVal = Math.max(1, ...safe.map((d) => Number(d.value || 0)));
+
+    const baseY = 186;
+    const topY = 24;
+    const barWidth = 70;
+    const slotWidth = 150;
+    const startX = 70;
+    let total = 0;
+    const parts = [`<line class="bar-axis" x1="30" y1="${baseY}" x2="490" y2="${baseY}"></line>`];
+
+    safe.forEach((entry, idx) => {
+        const numericValue = Number(entry.value || 0);
+        const ratio = numericValue / maxVal;
+        const height = numericValue <= 0 ? 0 : Math.max(6, Math.round(ratio * (baseY - topY)));
+        const x = startX + idx * slotWidth;
+        const y = baseY - height;
+        const textY = height > 0 ? y - 8 : baseY - 8;
+        total += numericValue;
+
+        parts.push(`<rect class="bar-rect" x="${x}" y="${y}" width="${barWidth}" height="${height}" rx="8" ry="8"></rect>`);
+        parts.push(`<text class="bar-value" x="${x + barWidth / 2}" y="${textY}">PHP ${numericValue.toFixed(2)}</text>`);
+        parts.push(`<text class="bar-label" x="${x + barWidth / 2}" y="208">${entry.label}</text>`);
+    });
+
+    svg.innerHTML = parts.join("");
+    const summary = document.getElementById("monthly-summary");
+    if (summary) {
+        summary.textContent = `Total for last 3 months: PHP ${total.toFixed(2)}`;
+    }
+}
+
+function renderWeeklyLine(weekly) {
+    const svg = document.getElementById("weekly-line-chart");
+    const axis = document.getElementById("weekly-axis");
+    if (!svg || !axis) return;
+
+    const safe = weekly.slice(0, 5);
+    while (safe.length < 5) safe.push({ label: "Week", value: 0 });
+    axis.innerHTML = safe.map((w) => `<li>${w.label}</li>`).join("");
+
+    const values = safe.map((d) => Number(d.value || 0));
+    const maxVal = Math.max(1, ...values);
+    const minX = 30;
+    const maxX = 470;
+    const minY = 20;
+    const maxY = 180;
+    const step = (maxX - minX) / (safe.length - 1 || 1);
+
+    const points = safe.map((d, i) => {
+        const x = minX + step * i;
+        const normalized = Number(d.value || 0) / maxVal;
+        const y = maxY - normalized * (maxY - minY);
+        return { x, y };
+    });
+
+    const polyPoints = points.map((p) => `${p.x},${p.y}`).join(" ");
+    svg.innerHTML = `<polyline class="line-plot" points="${polyPoints}"></polyline>` +
+        points.map((p) => `<circle class="line-point" cx="${p.x}" cy="${p.y}" r="4"></circle>`).join("");
+}
+
+function renderDashboard(data) {
+    const stats = data.stats || {};
+    const insights = data.insights || {};
+
+    document.getElementById("kpi-products").textContent = Number(stats.total_products || 0);
+    document.getElementById("kpi-lowstock").textContent = Number(stats.low_stock_count || 0);
+    document.getElementById("kpi-sales").textContent = Number(stats.today_sales || 0);
+    document.getElementById("kpi-month").textContent = Number(stats.this_month_revenue || 0).toFixed(2);
+
+    renderTopSellers(insights.top_sellers || []);
+    renderWeeklyLine(insights.weekly || []);
+    renderMonthlyBars(insights.monthly || []);
+}
+
+function toggleLowStockFilter() {
+    const table = document.querySelector(".low-stock-table");
+    const btn = document.getElementById("btn-filter");
+    if (!table || !btn) return;
+    lowStockOnly = !lowStockOnly;
+    table.classList.toggle("hidden", !lowStockOnly);
+    btn.textContent = lowStockOnly ? "Filter: Low Stock ON" : "Filter \u2630";
+}
+
+function exportDashboardData() {
+    const payload = JSON.stringify(currentDashboardData, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    a.href = url;
+    a.download = `dashboard-export-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+async function refreshDashboard() {
+    try {
+        const response = await fetch("{{ url_for('dashboard_data_api') }}", {
+            method: "GET",
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: { "Accept": "application/json" },
+        });
+        if (!response.ok) throw new Error("dashboard_data_api failed");
+        const contentType = response.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) throw new Error("Non-JSON response");
+        currentDashboardData = await response.json();
+        renderDashboard(currentDashboardData);
+    } catch (err) {
+        // Fallback to stats-only endpoint so KPI cards still refresh.
+        try {
+            const response = await fetch("{{ url_for('dashboard_stats_api') }}", {
+                method: "GET",
+                credentials: "same-origin",
+                cache: "no-store",
+                headers: { "Accept": "application/json" },
+            });
+            if (!response.ok) return;
+            const stats = await response.json();
+            currentDashboardData.stats = stats;
+            renderDashboard(currentDashboardData);
+        } catch (_) {
+            // Keep last rendered state if network/session is temporarily unavailable.
+        }
+    }
+}
+
+const btnRefresh = document.getElementById("btn-refresh");
+const btnFilter = document.getElementById("btn-filter");
+const btnExport = document.getElementById("btn-export");
+const btnEdit = document.getElementById("btn-edit");
+if (btnRefresh) btnRefresh.addEventListener("click", refreshDashboard);
+if (btnFilter) btnFilter.addEventListener("click", toggleLowStockFilter);
+if (btnExport) btnExport.addEventListener("click", exportDashboardData);
+if (btnEdit) {
+    btnEdit.addEventListener("click", () => {
+        window.location.href = "{{ url_for('inventory_page') }}";
+    });
+}
+
+renderDashboard(initialDashboardData);
+refreshDashboard();
+setInterval(refreshDashboard, 10000);
+</script>
+{% endblock %}

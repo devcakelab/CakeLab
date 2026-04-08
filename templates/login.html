@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% set page_title = "Login - CakeLab" %}
+{% set show_nav = false %}
+{% set body_class = "login-page" %}
+
+{% block content %}
+<section class="bakery-shell">
+    <div class="bakery-card">
+        <header class="bakery-nav">
+            <div class="brand">CakeLab</div>
+            <nav>
+
+            </nav>
+        </header>
+
+        <div class="bakery-content">
+            <div class="bakery-copy">
+                <h1>Cake<br>Lab</h1>
+                <p>Sign in to manage orders, inventory, and reports in your bakery dashboard.</p>
+                <a class="cta" href="{{ url_for('register') }}">Follow Along</a>
+
+                <form method="post" action="{{ url_for('login_submit') }}" class="login-form">
+                    <label for="username">Username</label>
+                    <input id="username" name="username" required>
+
+                    <label for="password">Password</label>
+                    <input id="password" type="password" name="password" required>
+
+                    <button type="submit">Sign in</button>
+                </form>
+
+                <p class="meta"><strong>Default login:</strong> admin / admin123</p>
+            </div>
+
+        </div>
+    </div>
+</section>
+{% endblock %}

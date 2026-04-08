@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% set page_title = "POS - CakeLab" %}
+{% set show_nav = true %}
+{% set active_page = "pos" %}
+
+{% block content %}
+<style>
+    .pos-wrap { display: grid; grid-template-columns: 1.25fr 1fr; gap: 18px; }
+    .pos-left, .pos-right { background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .catalog-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 8px; }
+    .catalog-title { margin: 0; font-size: 15px; color: #374151; }
+    .cat-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+    .cat-btn { width: auto; margin: 0; white-space: nowrap; background: #ffffff; border: 1px solid #d6dde8; border-radius: 999px; padding: 8px 12px; text-align: center; font-weight: 600; cursor: pointer; color: #3b4c66; font-size: 12px; }
+    .cat-btn.active { background: #1e73ff; color: #fff; border-color: #1e73ff; }
+    .products-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .product-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 10px; text-align: center; min-height: 170px; }
+    .product-card.out { background: #f3f4f6; color: #6b7280; }
+    .thumb { width: 88px; height: 56px; margin: 0 auto 6px; border-radius: 10px; background: #f7f1dc; border: 1px solid #e2d8b7; display: flex; align-items: center; justify-content: center; font-size: 30px; }
+    .pname { font-size: 16px; font-weight: 600; line-height: 1.25; min-height: 40px; }
+    .stock { margin-top: 4px; color: #7d5ed1; font-weight: 700; font-size: 14px; }
+    .stock.low { color: #d01f1f; }
+    .stock.zero { color: #6b7280; }
+    .quick-add { margin-top: 8px; background: #1e73ff; }
+    .quick-add:disabled { background: #565656; cursor: not-allowed; }
+    .cart-row { display: grid; grid-template-columns: 68px 1fr 124px 90px; align-items: center; gap: 8px; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
+    .qty-box { display: flex; align-items: center; gap: 6px; justify-content: center; }
+    .qty-box form { margin: 0; display: inline; }
+    .qty-btn { width: 30px; height: 30px; border-radius: 6px; border: none; background: #1e73ff; color: #fff; font-size: 19px; }
+    .qty-chip { min-width: 30px; text-align: center; background: #fff; border: 1px solid #ccc; border-radius: 3px; padding: 2px 6px; font-weight: bold; }
+    .totals { margin-top: 14px; border-top: 1px solid #d1d5db; padding-top: 12px; }
+    .tot-line { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 16px; }
+    .tot-line.big { font-size: 29px; font-weight: 700; margin-top: 10px; }
+    .actions { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 14px; }
+    .checkout-form { display: grid; gap: 8px; }
+    .checkout-form input { margin: 0; }
+    .btn-void { background: #df3333; }
+    .btn-pay { background: #1e73ff; color: #fff; font-weight: bold; }
+    .receipt-link { margin-top: 10px; }
+    .section-manager { margin-top: 12px; border: 1px solid #dbe2eb; border-radius: 12px; background: #f8fafc; padding: 10px 12px 12px; }
+    .section-title { margin: 0 0 10px; font-size: 14px; font-weight: 700; color: #334155; }
+    .section-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .section-form { margin: 0; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; }
+    .section-form h4 { margin: 0 0 8px; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: 0.04em; }
+    .section-form input, .section-form select, .section-form button { margin-bottom: 6px; }
+    .section-form button { margin-bottom: 0; }
+    .cart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .cart-header h3 { margin: 0; font-size: 16px; color: #111827; }
+    .cart-count { font-size: 12px; color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 4px 8px; }
+    @media (max-width: 1100px) {
+        .pos-wrap { grid-template-columns: 1fr; }
+        .products-grid { grid-template-columns: repeat(2, 1fr); }
+        .section-grid { grid-template-columns: 1fr; }
+    }
+</style>
+
+<div class="pos-wrap">
+    <div class="pos-left">
+        <div class="catalog-header">
+            <h3 class="catalog-title">Cake Catalog</h3>
+        </div>
+        <div class="cat-row">
+            <button type="button" class="cat-btn active" data-catbtn="ALL">ALL</button>
+            {% for s in sections %}
+            <button type="button" class="cat-btn" data-catbtn="{{ s.id }}">{{ s.name }}</button>
+            {% endfor %}
+        </div>
+        <div class="products-grid">
+            {% for p in products %}
+            <div class="product-card {% if p.stock <= 0 %}out{% endif %}" data-cat="{{ p.section_id or '' }}">
+                <div class="thumb">{{ p.icon }}</div>
+                <div class="pname">{{ p.name }}</div>
+                <div><small style="color:#6b7280;">{{ p.section_name }}</small></div>
+                {% if p.stock <= 0 %}
+                <div class="stock zero">No Stock</div>
+                {% elif p.stock <= p.low_stock_threshold %}
+                <div class="stock low">{{ p.stock }} Left</div>
+                {% else %}
+                <div class="stock">{{ p.stock }} Left</div>
+                {% endif %}
+                <form method="post" action="{{ url_for('pos_add_to_cart') }}">
+                    <input type="hidden" name="sku" value="{{ p.sku }}">
+                    <input type="hidden" name="quantity" value="1">
+                    <button class="quick-add" type="submit" {% if p.stock <= 0 %}disabled{% endif %}>Add</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="pos-right">
+        <div class="cart-header">
+            <h3>Current Cart</h3>
+            <span class="cart-count">{{ cart_items|length if cart_items else 0 }} item(s)</span>
+        </div>
+        {% if cart_items %}
+            {% for row in cart_items %}
+            <div class="cart-row">
+                <div class="thumb" style="width:62px;height:48px;margin:0;font-size:24px;">{{ row.icon }}</div>
+                <div>
+                    <div><strong>{{ row.name }}</strong></div>
+                    <small style="color:#6b7280;">{{ row.sku }}</small>
+                </div>
+                <div class="qty-box">
+                    <form method="post" action="{{ url_for('pos_adjust_cart') }}">
+                        <input type="hidden" name="product_id" value="{{ row.product_id }}">
+                        <input type="hidden" name="delta" value="-1">
+                        <button class="qty-btn" type="submit">-</button>
+                    </form>
+                    <div class="qty-chip">{{ row.quantity }}</div>
+                    <form method="post" action="{{ url_for('pos_adjust_cart') }}">
+                        <input type="hidden" name="product_id" value="{{ row.product_id }}">
+                        <input type="hidden" name="delta" value="1">
+                        <button class="qty-btn" type="submit">+</button>
+                    </form>
+                </div>
+                <div><strong style="font-size:14px;">PHP {{ "%.2f"|format(row.line_total) }}</strong></div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p>Cart is empty.</p>
+        {% endif %}
+
+        <div class="totals">
+            <div class="tot-line"><span>Subtotal:</span><span>PHP {{ "%.2f"|format(cart_subtotal) }}</span></div>
+            <div class="tot-line big"><span>Total:</span><span>PHP {{ "%.2f"|format(cart_total) }}</span></div>
+        </div>
+
+        <div class="actions">
+            <form method="post" action="{{ url_for('pos_clear_cart') }}">
+                <button class="btn-void" type="submit">Void</button>
+            </form>
+            <form class="checkout-form" method="post" action="{{ url_for('pos_checkout') }}">
+                <input type="text" name="customer_name" placeholder="Customer name (optional)">
+                <button class="btn-pay" type="submit">Proceed to Payment</button>
+            </form>
+        </div>
+
+        <div class="section-manager">
+            <p class="section-title">Manage Sections (Add / Edit / Delete)</p>
+            <div class="section-grid">
+                <form class="section-form" method="post" action="{{ url_for('pos_section_add') }}">
+                    <h4>Add</h4>
+                    <input type="text" name="name" placeholder="New section name" required>
+                    <button type="submit">Add Section</button>
+                </form>
+                <form class="section-form" method="post" action="{{ url_for('pos_section_edit') }}">
+                    <h4>Edit</h4>
+                    <select name="section_id" required>
+                        {% for s in sections %}
+                        <option value="{{ s.id }}">{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <input type="text" name="name" placeholder="Rename to..." required>
+                    <button type="submit">Edit Section</button>
+                </form>
+                <form class="section-form" method="post" action="{{ url_for('pos_section_delete') }}">
+                    <h4>Delete</h4>
+                    <select name="section_id" required>
+                        {% for s in sections %}
+                        <option value="{{ s.id }}">{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="btn-void">Delete Section</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const catButtons = document.querySelectorAll("[data-catbtn]");
+const cards = document.querySelectorAll("[data-cat]");
+for (const btn of catButtons) {
+    btn.addEventListener("click", () => {
+        const selected = btn.dataset.catbtn;
+        for (const b of catButtons) b.classList.remove("active");
+        btn.classList.add("active");
+        for (const card of cards) {
+            card.style.display = selected === "ALL" || card.dataset.cat === selected ? "" : "none";
+        }
+    });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,6 @@
+Flask
+reportlab
+Pillow
+django
+djangorestframework
+django-cors-headers

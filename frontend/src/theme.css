@@ -1,0 +1,49 @@
+:root {
+  /* CakeLab core palette */
+  --flour-white: #f6f1ff;
+  --steel-grey: #6b5b88;
+  --steel-grey-900: #2b1f47;
+  --berry-pink: #ff4fa3;
+  --berry-pink-dark: #e3358b;
+  --violet-accent: #7a5bd6;
+  --lavender-soft: #efe7ff;
+
+  /* Semantic tokens */
+  --bg: var(--flour-white);
+  --surface: #ffffff;
+  --surface-soft: #f7f2ff;
+  --border: #ddcff5;
+  --text: #221738;
+  --muted: var(--steel-grey);
+  --brand: var(--berry-pink);
+  --brand-dark: var(--berry-pink-dark);
+  --success: #0f766e;
+  --danger: #be185d;
+  --warning: #c06b00;
+  --ring: rgba(255, 79, 163, 0.28);
+  --sidebar-bg-1: #2b1f47;
+  --sidebar-bg-2: #5c43a5;
+
+  /* Typography */
+  --font-sans: "Inter", "Montserrat", "Segoe UI", Arial, sans-serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+
+  /* Radius + spacing */
+  --radius-sm: 8px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Elevation */
+  --shadow-sm: 0 2px 8px rgba(17, 24, 39, 0.06);
+  --shadow-md: 0 8px 20px rgba(17, 24, 39, 0.1);
+}
