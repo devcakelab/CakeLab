@@ -1,0 +1,577 @@
+================================================================================
+  CAKELAB POINT-OF-SALE SYSTEM
+  Technical Documentation (Full Reference)
+================================================================================
+
+Document version: 1.0
+Stack summary: Django 6.x REST API + SQLite + React (Vite) SPA
+Primary currency (UI/PDF): Philippine Peso (PHP)
+
+This file describes architecture, setup, configuration, data model, API
+endpoints, frontend structure, receipts, and operational notes. It is
+intended for developers and system maintainers.
+
+
+================================================================================
+1. SYSTEM OVERVIEW
+================================================================================
+
+CakeLab is a web-based POS (point of sale) for retail-style sales with:
+
+  - User accounts (Django auth) with registration, login, logout, and
+    password reset (no email verification; reset is immediate by username).
+  - Product catalog with SKU, name, price, stock, low-stock threshold,
+    section assignment, and an "ingredient" flag (ingredients are hidden from
+    the POS sellable grid but remain manageable in inventory).
+  - Checkout with cart, customer name, stock validation, and atomic updates.
+  - Sales history with JSON receipt data, PDF receipts, and optional email
+    delivery of PDF attachments.
+  - Dashboard metrics, chart-oriented insights, time-bucketed sales reports,
+    low-stock listing, and per-user sales performance.
+
+The browser talks to the API on port 8000; the SPA is served by Vite on
+5173. Session cookies identify the logged-in user (see Authentication).
+
+
+================================================================================
+2. REPOSITORY LAYOUT
+================================================================================
+
+pos_system/
+  requirements.txt          Python dependencies (Django, DRF, CORS, PDF libs)
+  README.md                 Quick start and high-level notes
+  DOCUMENTATION.txt         This file
+  start_system.bat          Windows: starts backend + frontend, opens browser
+  start_backend.bat         Windows: Django runserver only
+  start_frontend.bat        Windows: Vite dev server only
+  Gmail.env                 (optional, local) SMTP settings; gitignored
+  sig.jpg / sig.png / ...   (optional) Receipt signature image at project root
+
+  backend/
+    manage.py
+    db.sqlite3              SQLite database (created after migrate; gitignored)
+    config/                 Django project package
+      settings.py           Installed apps, DB, CORS, REST, dotenv loading
+      urls.py               Routes /admin/ and /api/
+      wsgi.py, asgi.py
+    core/                   Main application
+      models.py             Section, Product, Sale, SaleItem
+      serializers.py        DRF serializers and checkout payload shapes
+      views.py              All API handlers, PDF generation, email
+      urls.py               Paths under /api/
+      admin.py              Django admin registration
+      migrations/           Schema history
+      management/commands/
+        seed_pos.py         Creates sections, sample products, default admin
+
+  frontend/
+    package.json
+    vite.config.js
+    index.html
+    public/
+      clfav.png             Favicon
+      clheader.png          Login branding image
+    src/
+      main.jsx              React entry; imports theme.css + styles.css
+      App.jsx               Auth gate, navigation, global state, API wiring
+      theme.css, styles.css
+      constants/navigation.js
+      components/
+        Toast.jsx           Transient notifications
+        MetricCard.jsx      Dashboard stat cards
+      lib/
+        api.js              Axios instance (base URL port 8000, credentials)
+        formatters.js       formatCurrency / formatMoney (PHP prefix)
+        product.js          SKU helper from name, emoji icons by product name
+      views/
+        LoginView.jsx       Login, register, password reset UI
+        DashboardView.jsx   Stats + insights visualization
+        PosView.jsx         Product grid, cart, checkout
+        InventoryView.jsx   Products, sections, ingredients split
+        SalesView.jsx       Transaction list, receipt panel, PDF/email
+        ReportsView.jsx     Period reports (daily/weekly/monthly)
+        PerformanceView.jsx Staff leaderboard by revenue
+
+
+================================================================================
+3. PREREQUISITES
+================================================================================
+
+  - Python 3.x (project developed with 3.13-compatible Django 6)
+  - Node.js LTS (for npm and Vite)
+  - pip (Python package installer)
+
+Optional for receipt email:
+
+  - SMTP account (e.g. Gmail with app password)
+  - Optional image file for e-signature on PDF (see Configuration)
+
+
+================================================================================
+4. INSTALLATION AND FIRST RUN
+================================================================================
+
+4.1 Backend
+-----------
+  cd backend
+  pip install -r ../requirements.txt
+  python manage.py migrate
+  python manage.py seed_pos
+  python manage.py runserver
+
+Default superuser-style staff login created by seed (not Django superuser):
+
+  Username: admin
+  Password: admin123
+  Display name: System Admin (stored as User.first_name)
+
+Use Django admin optionally:
+
+  python manage.py createsuperuser
+  Then visit http://127.0.0.1:8000/admin/
+
+4.2 Frontend
+------------
+  cd frontend
+  npm install
+  npm run dev
+
+Open http://localhost:5173 (or http://127.0.0.1:5173).
+
+4.3 Windows quick start
+-----------------------
+  From repository root, run start_system.bat
+  Backend: http://127.0.0.1:8000
+  Frontend: http://localhost:5173
+
+
+================================================================================
+5. CONFIGURATION
+================================================================================
+
+5.1 Environment files
+-----------------------
+At startup, settings.py loads KEY=VALUE pairs from these files if present
+(each line non-empty, non-comment, containing "="):
+
+  - <project_root>/.env
+  - <project_root>/Gmail.env
+  - backend/.env
+  - backend/Gmail.env
+
+Later files in the loop do not override keys already set by os.environ;
+_load_dotenv uses setdefault, so the first file wins for a given key when
+using settings.py loader. Separately, receipt/email code in views.py re-reads
+.env and Gmail.env from project root and backend with a merge order that
+favors explicit file values for SMTP (see _runtime_env_value).
+
+Gmail.env is listed in .gitignore; keep SMTP secrets out of version control.
+
+5.2 Django settings (highlights)
+--------------------------------
+  - DEBUG: True (development default; change for production)
+  - ALLOWED_HOSTS: empty list (must be set for real deployment)
+  - SECRET_KEY: from env DJANGO_SECRET_KEY or insecure dev default
+  - DATABASES: SQLite at backend/db.sqlite3
+  - CORS_ALLOWED_ORIGINS: localhost/127.0.0.1 port 5173
+  - CORS_ALLOW_CREDENTIALS: True (required for session cookies from SPA)
+  - REST_FRAMEWORK: JSON renderer only
+
+5.3 SMTP (receipt email)
+------------------------
+Used by POST /api/sales/<id>/receipt/email. Variables read by runtime helper:
+
+  SMTP_HOST
+  SMTP_PORT          (default 587)
+  SMTP_USER
+  SMTP_PASS          (spaces stripped; common for Gmail app passwords)
+  SMTP_FROM          (defaults to SMTP_USER if omitted)
+  SMTP_USE_TLS       true/false/1/yes/on (default true)
+
+If any required piece is missing, the API returns an error string explaining
+that email is not configured.
+
+5.4 Receipt PDF e-signature image
+--------------------------------
+_build_receipt_pdf_bytes embeds a signature graphic when a path resolves:
+
+  1) Environment variable SIGNATURE_IMAGE (must be an existing file path)
+  2) backend/assets/signature.png
+  3) Project parent directory files: sig.jpg, sig.jpeg, sig.png
+
+If none exist, the PDF prints a text line "E-signature: /s/ <name>" instead.
+
+5.5 PDF dependencies
+--------------------
+  - reportlab: required to generate receipt PDFs
+  - Pillow: helps ReportLab with some image formats for signatures
+
+If reportlab is missing, PDF and email endpoints return HTTP 501 with a clear
+message.
+
+
+================================================================================
+6. AUTHENTICATION AND SECURITY MODEL
+================================================================================
+
+6.1 Mechanism
+-------------
+  - Login (POST /api/auth/login) validates username/password against Django's
+    User model, then stores user.id in request.session["user_id"].
+  - Logout flushes the session.
+  - The React app uses axios with withCredentials: true so the session cookie
+    is sent on API requests.
+  - Protected endpoints use @login_required_api, which returns 401 if there is
+    no valid session user.
+
+6.2 CSRF
+--------
+Several auth-related views are decorated with @csrf_exempt so the SPA can POST
+JSON without CSRF token flow. This is convenient for local development but is
+not ideal for production hardening; a production deployment should use a proper
+CSRF or token strategy (e.g. CSRF cookie + header, or JWT).
+
+6.3 Public vs protected endpoints
+---------------------------------
+  Public (no session required for read or specific actions):
+    GET  /api/
+    GET  /api/products
+    GET  /api/sections
+    POST /api/auth/register
+    POST /api/auth/login
+    POST /api/auth/logout
+    POST /api/auth/reset-password
+
+  Protected (session required):
+    Most mutating catalog operations, checkout, sales list, dashboard,
+    reports, receipt PDF/email, performance, etc.
+
+Exact method/path matrix is in section 8.
+
+6.4 Password reset
+------------------
+POST /api/auth/reset-password accepts username, new_password (min 6 chars).
+There is no proof of ownership (no email token). Any client can reset any
+user's password if they know the username. Treat this as a convenience feature
+for trusted environments only.
+
+
+================================================================================
+7. DATA MODEL
+================================================================================
+
+Diagrams in the project root:
+  - ERD.md                  Entity-relationship (Mermaid — GitHub / mermaid.live)
+  - USE_CASE_DIAGRAM.md     UML use cases (PlantUML — plantuml.com or editor extension)
+  - ACTIVITY_DIAGRAM.md     UML activity diagrams with swimlanes (PlantUML)
+
+7.1 Section
+-----------
+  name            CharField, unique
+  created_at      auto
+
+Products optionally belong to one section; serializer exposes section id and
+section_name ("General" when null).
+
+7.2 Product
+-----------
+  sku                  unique
+  name
+  price                Decimal(10,2)
+  stock                integer, non-negative in business logic
+  low_stock_threshold  integer, default 10
+  is_ingredient        boolean; when true, excluded from POS grid in UI
+  section              FK Section, null allowed
+  created_at           auto
+
+7.3 Sale
+--------
+  user            FK User, null allowed (stores cashier)
+  customer_name   default "Walk-in Customer"
+  total           Decimal(12,2)
+  created_at      auto
+
+7.4 SaleItem
+------------
+  sale         FK Sale CASCADE
+  product      FK Sale PROTECT (cannot delete product with sale lines)
+  quantity     positive integer
+  unit_price   snapshot at sale time
+  line_total   quantity * unit_price
+
+Checkout creates Sale + SaleItems and decrements Product.stock inside a single
+database transaction with select_for_update on products.
+
+
+================================================================================
+8. HTTP API REFERENCE
+================================================================================
+
+Base URL: http://<host>:8000/api
+
+Unless noted, request bodies are JSON. Successful responses are JSON except
+PDF download.
+
+----------------------------------------------------------------------
+GET /api/
+----------------------------------------------------------------------
+Discovery payload: API name, status, list of endpoint path strings.
+
+----------------------------------------------------------------------
+POST /api/auth/register
+----------------------------------------------------------------------
+Body: username, password (min 6), full_name
+Creates User with first_name = full_name. Username stored lowercased.
+201: user profile object { id, username, full_name }
+400: duplicate username
+
+----------------------------------------------------------------------
+POST /api/auth/login
+----------------------------------------------------------------------
+Body: username, password
+200: { user: { id, username, full_name } }
+401: invalid credentials
+
+----------------------------------------------------------------------
+POST /api/auth/logout
+----------------------------------------------------------------------
+204: session cleared
+
+----------------------------------------------------------------------
+POST /api/auth/reset-password
+----------------------------------------------------------------------
+Body: username, new_password
+200: success message
+400/404: validation or unknown user
+
+----------------------------------------------------------------------
+GET /api/auth/me
+----------------------------------------------------------------------
+200: current user profile
+401: not logged in
+
+----------------------------------------------------------------------
+GET /api/sections
+----------------------------------------------------------------------
+200: array of { id, name }
+
+POST /api/sections  (auth required)
+----------------------------------------------------------------------
+Body: name
+201: section object
+
+----------------------------------------------------------------------
+PUT /api/sections/<id>  (auth required)
+----------------------------------------------------------------------
+Body: name
+
+DELETE /api/sections/<id>  (auth required)
+----------------------------------------------------------------------
+400 if products still assigned or would delete last section
+204 on success
+
+----------------------------------------------------------------------
+GET /api/products
+----------------------------------------------------------------------
+200: array of product objects:
+  id, sku, name, price, stock, low_stock_threshold, is_ingredient,
+  section (nullable id), section_name
+
+POST /api/products  (auth required)
+----------------------------------------------------------------------
+Body: serializer fields (sku, name, price, stock, low_stock_threshold,
+      is_ingredient, section optional)
+201: created product
+
+----------------------------------------------------------------------
+PUT /api/products/<id>  (auth required)
+----------------------------------------------------------------------
+Partial updates supported (partial=True in view)
+200: updated product
+
+DELETE /api/products/<id>  (auth required)
+----------------------------------------------------------------------
+204: deleted
+
+----------------------------------------------------------------------
+GET /api/products/low-stock  (auth required)
+----------------------------------------------------------------------
+Products where stock <= low_stock_threshold
+
+----------------------------------------------------------------------
+POST /api/checkout  (auth required)
+----------------------------------------------------------------------
+Body:
+  customer_name  optional string
+  items: [ { product_id, quantity }, ... ]
+
+201: { sale_id, total }
+400: empty cart, missing product, insufficient stock, etc.
+
+----------------------------------------------------------------------
+GET /api/sales  (auth required)
+----------------------------------------------------------------------
+Up to 200 recent sales, each with items (sku, name, quantity, unit_price,
+line_total), customer_name, total, cashier_name, created_at.
+
+----------------------------------------------------------------------
+GET /api/sales/<id>  (auth required)
+----------------------------------------------------------------------
+JSON receipt-style payload (sale wrapper + items array).
+
+----------------------------------------------------------------------
+GET /api/sales/<id>/receipt.pdf  (auth required)
+----------------------------------------------------------------------
+application/pdf inline; filename receipt-<id>.pdf
+Receipt layout: header, cashier/customer, line items (product name only; SKU
+is not printed on the PDF), grand total, thank-you and e-signature block with
+HMAC-derived short authorization code.
+
+----------------------------------------------------------------------
+POST /api/sales/<id>/receipt/email  (auth required)
+----------------------------------------------------------------------
+Body: { "email": "user@example.com" }
+Sends plain text email with PDF attachment. 400 if SMTP misconfigured or send
+failure.
+
+----------------------------------------------------------------------
+GET /api/dashboard/stats  (auth required)
+----------------------------------------------------------------------
+Aggregates: total_products, low_stock_count, total_sales, gross_revenue,
+today_sales, today_revenue, this_month_revenue (money as float with 2 decimals).
+
+----------------------------------------------------------------------
+GET /api/dashboard/insights  (auth required)
+----------------------------------------------------------------------
+  top_sellers: top 3 by quantity with name, icon keyword, qty_sold, revenue
+  weekly: last up to 5 week buckets
+  monthly: last up to 3 month buckets
+  weekday_revenue: Mon-Sun totals
+
+----------------------------------------------------------------------
+GET /api/reports?period=daily|weekly|monthly  (auth required)
+----------------------------------------------------------------------
+Up to 30 rows, newest buckets first:
+  period_label, sale_count, revenue
+
+----------------------------------------------------------------------
+GET /api/users/performance  (auth required)
+----------------------------------------------------------------------
+Per-user: id, username, full_name, sales_count, revenue
+
+
+================================================================================
+9. FRONTEND BEHAVIOR
+================================================================================
+
+9.1 API client
+--------------
+frontend/src/lib/api.js configures axios:
+
+  baseURL = same protocol/host as the page, port 8000, path prefix /api
+  withCredentials = true
+
+Therefore the SPA must be opened from a host that matches cookie domain rules;
+using localhost consistently avoids mismatches between 127.0.0.1 and localhost.
+
+9.2 Navigation tabs
+-------------------
+Defined in constants/navigation.js:
+
+  dashboard, pos, inventory, sales, reports, performance
+
+9.3 POS tab
+-----------
+  - Lists only products with is_ingredient === false
+  - Filter by section and search by name
+  - Cart operations client-side until checkout POST
+  - SKU for new products in inventory may be auto-suggested via buildSkuFromName
+
+9.4 Inventory tab
+-----------------
+  - Full CRUD for products and sections
+  - Split view: sellable products vs ingredients
+
+9.5 Sales tab
+-------------
+  - Lists sales; selecting one loads receipt JSON
+  - PDF: opens or downloads from /api/sales/<id>/receipt.pdf
+  - Email: POST with address from form
+
+9.6 Error handling
+------------------
+App.jsx centralizes apiErrorMessage() to surface DRF { detail: "..." } strings
+in toasts.
+
+
+================================================================================
+10. SEED DATA (seed_pos)
+================================================================================
+
+Creates sections if missing: General, Croissant, Bread, Section 3.
+
+Creates five dessert products (DSRT-001 .. DSRT-005) with prices, stock, and
+thresholds if SKU does not exist.
+
+Creates admin user if username "admin" is absent:
+  password: admin123
+  first_name: System Admin
+
+Idempotent: safe to run multiple times; existing SKUs and users are not
+duplicated.
+
+
+================================================================================
+11. DJANGO ADMIN
+================================================================================
+
+Models Section, Product, Sale, SaleItem are registered in admin.py for manual
+inspection and correction. Use createsuperuser to access /admin/.
+
+
+================================================================================
+12. PRODUCTION CONSIDERATIONS (CHECKLIST)
+================================================================================
+
+  - Set DEBUG = False, configure ALLOWED_HOSTS, secure SECRET_KEY env var
+  - Use a production-grade database (PostgreSQL, etc.) instead of SQLite
+  - Serve static/build frontend via nginx or whitenoise; align CORS origins
+  - Enable HTTPS; set SESSION_COOKIE_SECURE and CSRF_COOKIE_SECURE
+  - Review @csrf_exempt usage and session fixation risks
+  - Harden or remove unauthenticated password reset
+  - Rotate any credentials that ever appeared in a tracked env file
+  - Run behind a process manager (gunicorn, uvicorn) + reverse proxy
+
+
+================================================================================
+13. TROUBLESHOOTING
+================================================================================
+
+  - CORS errors: ensure origin is http://localhost:5173 or 127.0.0.1:5173 as
+    configured in settings.CORS_ALLOWED_ORIGINS
+  - 401 on API: session expired or login failed; ensure credentials sent
+    (withCredentials)
+  - PDF 501: pip install reportlab (and Pillow)
+  - Email failures: verify SMTP_* variables; Gmail often needs app passwords
+  - Blank receipt signature: add SIGNATURE_IMAGE or place sig.png in project root
+  - npm ECONNREFUSED to API: confirm Django running on port 8000
+
+
+================================================================================
+14. FILE INDEX (QUICK REFERENCE)
+================================================================================
+
+Backend entry:           backend/manage.py
+URL routing:               backend/config/urls.py, backend/core/urls.py
+Business logic + PDF:    backend/core/views.py
+Schema:                  backend/core/models.py
+API shapes:              backend/core/serializers.py
+Seed:                    backend/core/management/commands/seed_pos.py
+
+Frontend entry:          frontend/src/main.jsx
+Shell / state:           frontend/src/App.jsx
+HTTP:                    frontend/src/lib/api.js
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================

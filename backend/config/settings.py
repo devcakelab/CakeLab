@@ -31,8 +31,9 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-_load_dotenv(PROJECT_ROOT / ".env")
-_load_dotenv(BASE_DIR / ".env")
+for env_file in (".env", "Gmail.env"):
+    _load_dotenv(PROJECT_ROOT / env_file)
+    _load_dotenv(BASE_DIR / env_file)
 
 
 # Quick-start development settings - unsuitable for production

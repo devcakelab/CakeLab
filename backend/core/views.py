@@ -5,6 +5,7 @@ from io import BytesIO
 import hashlib
 import hmac
 import os
+from pathlib import Path
 import re
 import smtplib
 import ssl
@@ -31,6 +32,29 @@ from .serializers import (
     UserProfileSerializer,
     to_money,
 )
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _runtime_env_value(key: str, default: str = "") -> str:
+    env_values: dict[str, str] = {}
+    for file_name in (".env", "Gmail.env"):
+        env_values.update(_parse_env_file(settings.BASE_DIR.parent / file_name))
+        env_values.update(_parse_env_file(settings.BASE_DIR / file_name))
+    if key in env_values and env_values[key] != "":
+        return env_values[key]
+    return os.environ.get(key, default)
 
 
 @api_view(["GET"])
@@ -168,16 +192,22 @@ def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
     pdf.drawString(left + 205, y - 30, sale.customer_name or "Walk-in Customer")
     y -= 64
 
+    # Table columns (A4 ~595pt wide): no SKU on receipt; product column uses full left margin.
+    col_product_x = left + 6
+    col_qty_right = left + 320
+    col_unit_right = left + 410
+    col_line_right = right - 10
+    product_clip_w = col_qty_right - col_product_x - 10
+
     def draw_table_header(pos_y: float) -> float:
         pdf.setFillColor(colors.HexColor("#F7F2FF"))
         pdf.roundRect(left, pos_y - 16, right - left, 18, 4, stroke=0, fill=1)
         pdf.setFillColor(colors.HexColor("#3A2B5E"))
         pdf.setFont("Helvetica-Bold", 9)
-        pdf.drawString(left + 6, pos_y - 10, "SKU")
-        pdf.drawString(left + 90, pos_y - 10, "Product")
-        pdf.drawRightString(left + 350, pos_y - 10, "Qty")
-        pdf.drawRightString(left + 445, pos_y - 10, "Unit Price")
-        pdf.drawRightString(right - 6, pos_y - 10, "Line Total")
+        pdf.drawString(col_product_x, pos_y - 10, "Product")
+        pdf.drawRightString(col_qty_right, pos_y - 10, "Qty")
+        pdf.drawRightString(col_unit_right, pos_y - 10, "Unit Price")
+        pdf.drawRightString(col_line_right, pos_y - 10, "Line Total")
         pdf.setFillColor(colors.black)
         return pos_y - 24
 
@@ -197,12 +227,13 @@ def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
             pdf.rect(left, y - 12, right - left, row_height, stroke=0, fill=1)
             pdf.setFillColor(colors.black)
 
-        name = item.product.name if len(item.product.name) <= 32 else f"{item.product.name[:29]}..."
-        pdf.drawString(left + 6, y, str(item.product.sku))
-        pdf.drawString(left + 90, y, name)
-        pdf.drawRightString(left + 350, y, str(item.quantity))
-        pdf.drawRightString(left + 445, y, f"PHP {to_money(item.unit_price):.2f}")
-        pdf.drawRightString(right - 6, y, f"PHP {to_money(item.line_total):.2f}")
+        raw_name = str(item.product.name or "")
+        max_chars = max(12, int(product_clip_w / 5.2))
+        name = raw_name if len(raw_name) <= max_chars else f"{raw_name[: max(0, max_chars - 3)]}..."
+        pdf.drawString(col_product_x, y, name)
+        pdf.drawRightString(col_qty_right, y, str(item.quantity))
+        pdf.drawRightString(col_unit_right, y, f"PHP {to_money(item.unit_price):.2f}")
+        pdf.drawRightString(col_line_right, y, f"PHP {to_money(item.line_total):.2f}")
         y -= row_height
         row_num += 1
 
@@ -225,35 +256,41 @@ def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
     pdf.setFillColor(colors.HexColor("#4B5563"))
     pdf.setFont("Helvetica-Oblique", 9)
     pdf.drawString(left, y, "Thank you for your purchase.")
-    y -= 24
+    y -= 22
 
     pdf.setFillColor(colors.HexColor("#3A2B5E"))
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawString(left, y, "E-Signature Authorization")
-    y -= 14
+    y -= 16
     pdf.setFillColor(colors.black)
     pdf.setFont("Helvetica", 10)
     pdf.drawString(left, y, f"Authorized by: {authorized_by}")
-    y -= 12
+    y -= 18
+
     signature_path = _signature_image_path()
+    sig_img_w, sig_img_h = 150.0, 36.0
     if signature_path:
-        pdf.drawString(left, y, "E-signature:")
+        label_y = y
+        pdf.drawString(left, label_y, "E-signature:")
+        # Image lower-left: place entire graphic below the label (PDF y increases upward).
+        img_bottom = label_y - 12 - sig_img_h
         pdf.drawImage(
             signature_path,
-            left + 75,
-            y - 18,
-            width=140,
-            height=34,
+            left,
+            img_bottom,
+            width=sig_img_w,
+            height=sig_img_h,
             preserveAspectRatio=True,
             mask="auto",
         )
-        y -= 24
+        y = img_bottom - 14
     else:
         pdf.drawString(left, y, f"E-signature: /s/ {authorized_by}")
-    y -= 12
+        y -= 18
+
     signed_at = timezone.localtime().strftime("%Y-%m-%d %H:%M:%S")
     pdf.drawString(left, y, f"Signed at: {signed_at}")
-    y -= 12
+    y -= 14
     pdf.setFont("Helvetica-Bold", 9)
     pdf.setFillColor(colors.HexColor("#4B5563"))
     pdf.drawString(left, y, f"Authorization code: {auth_code}")
@@ -265,12 +302,13 @@ def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
 
 
 def _send_receipt_email(recipient: str, sale_id: int, pdf_bytes: bytes) -> tuple[bool, str]:
-    smtp_host = os.environ.get("SMTP_HOST", "").strip()
-    smtp_port = int(os.environ.get("SMTP_PORT", "587").strip() or "587")
-    smtp_user = os.environ.get("SMTP_USER", "").strip()
-    smtp_pass = os.environ.get("SMTP_PASS", "").strip()
-    smtp_from = os.environ.get("SMTP_FROM", smtp_user).strip()
-    smtp_use_tls = os.environ.get("SMTP_USE_TLS", "true").strip().lower() in {"1", "true", "yes", "on"}
+    smtp_host = _runtime_env_value("SMTP_HOST", "").strip()
+    smtp_port = int(_runtime_env_value("SMTP_PORT", "587").strip() or "587")
+    smtp_user = _runtime_env_value("SMTP_USER", "").strip()
+    # Gmail app passwords are often copied with spaces; normalize safely.
+    smtp_pass = re.sub(r"\s+", "", _runtime_env_value("SMTP_PASS", ""))
+    smtp_from = _runtime_env_value("SMTP_FROM", smtp_user).strip()
+    smtp_use_tls = _runtime_env_value("SMTP_USE_TLS", "true").strip().lower() in {"1", "true", "yes", "on"}
 
     if not (smtp_host and smtp_port and smtp_user and smtp_pass and smtp_from):
         return (
@@ -307,6 +345,12 @@ def _send_receipt_email(recipient: str, sale_id: int, pdf_bytes: bytes) -> tuple
             ) as server:
                 server.login(smtp_user, smtp_pass)
                 server.send_message(msg)
+    except smtplib.SMTPAuthenticationError:
+        return (
+            False,
+            "Failed to send email: Gmail rejected credentials. Recreate an App Password, "
+            "set SMTP_USER to the same Gmail account, and update SMTP_PASS.",
+        )
     except Exception as exc:
         return False, f"Failed to send email: {exc}"
 
@@ -657,9 +701,11 @@ def dashboard_insights_view(request):
 
     week_grouped = defaultdict(Decimal)
     month_grouped = defaultdict(Decimal)
+    weekday_grouped = {idx: Decimal("0.00") for idx in range(7)}
     for sale in Sale.objects.all().only("created_at", "total"):
         week_grouped[_period_bucket(sale.created_at, "weekly")] += sale.total
         month_grouped[_period_bucket(sale.created_at, "monthly")] += sale.total
+        weekday_grouped[timezone.localtime(sale.created_at).weekday()] += sale.total
 
     weekly = [
         {"label": key, "value": to_money(value)}
@@ -668,6 +714,11 @@ def dashboard_insights_view(request):
     monthly = [
         {"label": key, "value": to_money(value)}
         for key, value in sorted(month_grouped.items())[-3:]
+    ]
+    weekday_labels = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    weekday_revenue = [
+        {"label": weekday_labels[idx], "value": to_money(weekday_grouped[idx])}
+        for idx in range(7)
     ]
 
     top_sellers = [
@@ -679,7 +730,14 @@ def dashboard_insights_view(request):
         }
         for row in top_rows
     ]
-    return Response({"top_sellers": top_sellers, "weekly": weekly, "monthly": monthly})
+    return Response(
+        {
+            "top_sellers": top_sellers,
+            "weekly": weekly,
+            "monthly": monthly,
+            "weekday_revenue": weekday_revenue,
+        }
+    )
 
 
 @api_view(["GET"])

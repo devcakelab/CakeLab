@@ -41,6 +41,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "price",
             "stock",
             "low_stock_threshold",
+            "is_ingredient",
             "section",
             "section_name",
         ]

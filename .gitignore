@@ -8,11 +8,12 @@ __pycache__/
 # Local environments / secrets
 .env
 .env.*
+Gmail.env
 
 # Django local DB
 backend/db.sqlite3
 
-# Legacy local DB
+# Legacy root SQLite (removed CLI; ignore if recreated)
 pos.db
 
 # Node
