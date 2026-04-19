@@ -14,6 +14,9 @@ export default function LoginView({
   onRegister,
   onResetPassword,
 }) {
+  const pageTitle =
+    authMode === "login" ? "Welcome!" : authMode === "register" ? "Create account" : "Reset password";
+
   return (
     <main className="login-page">
       <div className="login-glow login-glow-left" aria-hidden="true" />
@@ -21,12 +24,10 @@ export default function LoginView({
       <div className="login-layout">
         <section className="login-card login-card-glass" aria-labelledby="login-title">
           <h1 id="login-title" className="login-title">
-            {authMode === "login" ? "Login" : authMode === "register" ? "Register" : "Reset Password"}
+            {pageTitle}
           </h1>
-          <p className="login-subtitle">CakeLab</p>
-
           {authMode === "login" ? (
-            <form onSubmit={onLogin} className="login-form" aria-label="Login form">
+            <form onSubmit={onLogin} className="login-form" aria-label="Login form" autoComplete="off">
               <label className="login-field">
                 <span>Email or Username</span>
                 <input
@@ -34,7 +35,7 @@ export default function LoginView({
                   placeholder="you@example.com"
                   value={loginForm.username}
                   onChange={(e) => setLoginForm((s) => ({ ...s, username: e.target.value }))}
-                  autoComplete="username"
+                  autoComplete="off"
                   required
                 />
               </label>
@@ -46,7 +47,7 @@ export default function LoginView({
                   placeholder="Password"
                   value={loginForm.password}
                   onChange={(e) => setLoginForm((s) => ({ ...s, password: e.target.value }))}
-                  autoComplete="current-password"
+                  autoComplete="new-password"
                   required
                 />
               </label>
@@ -181,6 +182,7 @@ export default function LoginView({
 
         <aside className="login-brand-panel" aria-hidden="true">
           <img src={LOGIN_BRAND_IMAGE} alt="CakeLab logo" className="login-brand-image" />
+          <p className="login-brand-tagline">Crafted for smooth orders, fast checkout, and daily insights.</p>
         </aside>
       </div>
     </main>

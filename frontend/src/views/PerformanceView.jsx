@@ -1,4 +1,4 @@
-import { formatCurrency } from "../lib/formatters";
+import { formatCurrency } from "../lib/posUtils";
 
 export default function PerformanceView({ performanceRows }) {
   return (

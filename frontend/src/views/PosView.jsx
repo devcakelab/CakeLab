@@ -1,5 +1,4 @@
-import { formatCurrency } from "../lib/formatters";
-import { productIcon } from "../lib/product";
+import { formatCurrency, productIcon } from "../lib/posUtils";
 
 export default function PosView({
   searchTerm,
@@ -14,6 +13,10 @@ export default function PosView({
   removeCartItem,
   cartTotal,
   setCart,
+  customerName,
+  setCustomerName,
+  orderType,
+  setOrderType,
   checkout,
   busy,
 }) {
@@ -92,6 +95,23 @@ export default function PosView({
           <div className="checkout-bar">
             <p>Total</p>
             <strong>{formatCurrency(cartTotal)}</strong>
+          </div>
+          <div className="stack" style={{ marginTop: 14 }}>
+            <label className="field">
+              <span>Order type</span>
+              <select value={orderType} onChange={(e) => setOrderType(e.target.value)}>
+                <option value="walk_in">Walk-in</option>
+                <option value="online">Online order</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Customer name (optional)</span>
+              <input
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder={orderType === "online" ? "Customer name" : "Walk-in customer"}
+              />
+            </label>
           </div>
           <div className="checkout-actions">
             <button className="btn-ghost" onClick={() => setCart([])} disabled={cart.length === 0}>

@@ -1,0 +1,434 @@
+================================================================================
+CAKELAB POS SYSTEM - FULL FILE MAP
+================================================================================
+
+Purpose
+- This document lists every tracked project file and what it does.
+- For code files, it also lists key functions/classes/components.
+- Paths are relative to repository root.
+
+Legend
+- Source = manually maintained file.
+- Generated/Local = runtime/build file (not committed or not hand-edited).
+
+
+================================================================================
+RUNTIME ENTRY FLOW (WINDOWS)
+================================================================================
+
+1) `start_system.bat`
+   - Launches backend and frontend in separate terminals.
+   - Opens `http://localhost:5173`.
+2) `start_backend.bat`
+   - Runs Django API on `0.0.0.0:8000`.
+3) `start_frontend.bat`
+   - Installs frontend dependencies if missing, then runs Vite dev server.
+
+Default URLs
+- Frontend: `http://localhost:5173`
+- Backend API: `http://127.0.0.1:8000/api`
+
+
+================================================================================
+ROOT FILES
+================================================================================
+
+`README.md` (source)
+- Project overview, setup, API summary, launcher usage, seed login details.
+
+`.gitignore` (source)
+- Ignore rules for Python cache, env secrets, sqlite, `node_modules`, build output.
+
+`requirements.txt` (source)
+- Python dependencies: `django`, `djangorestframework`, `django-cors-headers`, `reportlab`, `Pillow`.
+
+`SYSTEM_STRUCTURE.txt` (source)
+- This file; system inventory and function map.
+
+`start_system.bat` (source)
+- Starts backend/frontend terminals and opens browser.
+- No functions (batch script commands only).
+
+`start_backend.bat` (source)
+- Starts Django dev server on port 8000.
+- No functions (batch script commands only).
+
+`start_frontend.bat` (source)
+- Ensures frontend dependencies exist, then starts Vite dev server.
+- No functions (batch script commands only).
+
+================================================================================
+BACKEND (DJANGO + DRF)
+================================================================================
+
+`backend/manage.py` (source)
+- Django CLI entrypoint.
+- Functions:
+  - `main()`: sets `DJANGO_SETTINGS_MODULE` and delegates to Django command runner.
+
+
+----------------------------------------
+backend/config
+----------------------------------------
+
+`backend/config/settings.py` (source)
+- Django settings, CORS/CSRF, env loading, app registration, DB settings.
+- Functions:
+  - `_load_dotenv(path)`: parse key/value env files.
+  - `_detect_lan_ip()`: detect host LAN IP for dev CSRF origins.
+
+`backend/config/__init__.py` (source)
+- Package marker for Django config module.
+- No functions/classes.
+
+`backend/config/urls.py` (source)
+- Root URL router.
+- Routes:
+  - `/admin/`
+  - `/api/` -> includes `core.urls`
+
+`backend/config/asgi.py` (source)
+- ASGI entrypoint for async deployments.
+- Variables:
+  - `application`
+
+`backend/config/wsgi.py` (source)
+- WSGI entrypoint for sync deployments.
+- Variables:
+  - `application`
+
+
+----------------------------------------
+backend/core
+----------------------------------------
+
+`backend/core/apps.py` (source)
+- Django app config for `core`.
+- Classes:
+  - `CoreConfig`
+
+`backend/core/admin.py` (source)
+- Registers models for Django admin.
+- No custom functions/classes (direct `admin.site.register(...)` calls).
+
+`backend/core/models.py` (source)
+- Domain models for sections, products, sales, and sale items.
+- Classes:
+  - `Section`
+  - `Product`
+  - `Sale`
+  - `SaleItem`
+
+`backend/core/serializers.py` (source)
+- DRF serializers for auth, inventory, checkout, and sales payloads.
+- Classes:
+  - `UserProfileSerializer`
+  - `RegisterSerializer`
+  - `SectionSerializer`
+  - `ProductSerializer`
+  - `CheckoutItemSerializer`
+  - `CheckoutSerializer`
+  - `SaleItemSerializer`
+  - `SaleSerializer`
+- Functions:
+  - `to_money(value)`: normalize decimal to rounded float.
+
+`backend/core/urls.py` (source)
+- API endpoints mounted under `/api`.
+- Routes:
+  - auth: `auth/register`, `auth/login`, `auth/logout`, `auth/me`, `auth/reset-password`
+  - sections: `sections`, `sections/<section_id>`
+  - products: `products`, `products/low-stock`, `products/<product_id>`
+  - pos/sales: `checkout`, `sales`, `sales/<sale_id>`, `sales/<sale_id>/receipt.pdf`, `sales/<sale_id>/receipt/email`
+  - analytics: `dashboard/stats`, `dashboard/insights`, `reports`, `reports/details`, `users/performance`
+
+`backend/core/views.py` (source)
+- Main API + business logic, receipt generation/emailing, report aggregation.
+- Utility/env functions:
+  - `_parse_env_file(path)`
+  - `_runtime_env_value(key, default)`
+  - `_session_user(request)`
+  - `login_required_api(func)` (decorator)
+  - `_authorized_by(request, sale)`
+  - `_build_receipt_auth_code(sale, authorized_by)`
+  - `_signature_image_path()`
+  - `_is_valid_email(value)`
+  - `_build_receipt_pdf_bytes(sale, authorized_by)`
+  - `_send_receipt_email(recipient, sale_id, pdf_bytes)`
+  - `_period_bucket(dt_value, period, tzinfo=None)`
+  - `_period_bounds(period, label)`
+  - `_dessert_icon(name)`
+- API endpoint functions:
+  - `api_root_view(request)`
+  - `register_view(request)`
+  - `login_view(request)`
+  - `logout_view(request)`
+  - `reset_password_view(request)`
+  - `me_view(request)`
+  - `sections_view(request)`
+  - `section_detail_view(request, section_id)`
+  - `products_view(request)`
+  - `product_detail_view(request, product_id)`
+  - `checkout_view(request)`
+  - `sales_view(request)`
+  - `dashboard_stats_view(request)`
+  - `low_stock_products_view(request)`
+  - `sale_receipt_view(request, sale_id)`
+  - `sale_receipt_pdf_view(request, sale_id)`
+  - `sale_receipt_email_view(request, sale_id)`
+  - `sales_report_view(request)`
+  - `sales_report_detail_view(request)`
+  - `dashboard_insights_view(request)`
+  - `user_performance_view(request)`
+
+`backend/core/management/commands/seed_pos.py` (source)
+- Django management command for default sections/products/admin user.
+- Constants:
+  - `SAMPLE_DESSERTS`
+- Classes:
+  - `Command(BaseCommand)`
+- Methods:
+  - `handle(...)`
+
+`backend/core/management/__init__.py` (source)
+- Package marker for management command namespace.
+- No functions/classes.
+
+`backend/core/management/commands/__init__.py` (source)
+- Package marker for command discovery.
+- No functions/classes.
+
+
+----------------------------------------
+backend/core/migrations
+----------------------------------------
+
+`backend/core/migrations/0001_initial.py` (source history)
+- Initial schema creation:
+  - `Section`, `Product`, `Sale`, `SaleItem`
+  - Product -> Section relation
+
+`backend/core/migrations/__init__.py` (source)
+- Package marker for migration module.
+- No functions/classes.
+
+`backend/core/migrations/0002_product_is_ingredient.py` (source history)
+- Adds `Product.is_ingredient`.
+
+`backend/core/migrations/0003_product_is_archived.py` (source history)
+- Adds `Product.is_archived`.
+
+`backend/core/migrations/0004_sale_order_type.py` (source history)
+- Adds `Sale.order_type`.
+
+
+================================================================================
+FRONTEND (REACT + VITE)
+================================================================================
+
+`frontend/package.json` (source)
+- Frontend package manifest and scripts:
+  - `dev`, `build`, `preview`
+
+`frontend/package-lock.json` (generated lockfile)
+- Exact npm dependency lock graph.
+
+`frontend/vite.config.js` (source)
+- Vite config using React plugin.
+- Dev server: host enabled, port 5173.
+
+`frontend/index.html` (source)
+- SPA shell and React root mount target (`#root`).
+
+`frontend/public/clfav.png` (source asset)
+- Browser favicon.
+
+`frontend/public/clheader.png` (source asset)
+- Login/branding illustration.
+
+
+----------------------------------------
+frontend/src
+----------------------------------------
+
+`frontend/src/main.jsx` (source)
+- React bootstrap file.
+- Mounts `App` and imports global CSS (`theme.css`, `styles.css`).
+
+`frontend/src/theme.css` (source)
+- Design token variables (colors, spacing, radius, shadows, typography).
+- No JS functions (CSS variable definitions only).
+
+`frontend/src/styles.css` (source)
+- Global/layout/component styles for login, nav, POS, inventory, sales, dashboard, reports.
+- No JS functions (CSS selectors/rules only).
+
+`frontend/src/App.jsx` (source)
+- Application orchestrator: auth/session, data fetching, POS/inventory/sales/report flows, tab routing.
+- Constants:
+  - `EMPTY_REGISTER_FORM`
+  - `EMPTY_RESET_FORM`
+  - `EMPTY_INVENTORY_FORM`
+- Functions:
+  - `apiErrorMessage(err, fallback)`
+  - `App()` component
+  - `loadProducts()`
+  - `loadSections()`
+  - `loadStats()`
+  - `loadInsights()`
+  - `loadSales()`
+  - `loadReport(period, startDate, endDate)`
+  - `loadSession()`
+  - `loadPrivateData()`
+  - `login(event)`
+  - `register(event)`
+  - `resetPassword(event)`
+  - `logout()`
+  - `addToCart(product)`
+  - `adjustCart(productId, delta)`
+  - `removeCartItem(productId)`
+  - `checkout()`
+  - `createProduct(event)`
+  - `deleteProduct(productId, productName)`
+  - `archiveProduct(productId, productName)`
+  - `restoreProduct(productId, productName)`
+  - `restockProduct(productId, productName, currentStock)`
+  - `createSection(name)`
+  - `updateSection(sectionId, name)`
+  - `deleteSection(sectionId)`
+  - `fetchReceipt(saleId)`
+  - `clearReceipt()`
+  - `toggleReceipt(saleId)`
+  - `sendReceiptEmail()`
+
+`frontend/src/constants/navigation.js` (source)
+- Sidebar nav definitions.
+- Exports:
+  - `NAV_ITEMS`
+
+`frontend/src/lib/api.js` (source)
+- Shared axios API client.
+- Exports:
+  - `api` (base URL from browser hostname + `:8000/api`, credentials enabled)
+
+`frontend/src/lib/posUtils.js` (source)
+- POS utility helpers.
+- Functions:
+  - `formatMoney(value)`
+  - `formatCurrency(value)`
+  - `buildSkuFromName(name)`
+  - `productIcon(name)`
+
+
+----------------------------------------
+frontend/src/components
+----------------------------------------
+
+`frontend/src/components/Toast.jsx` (source)
+- Floating notification component.
+- Component:
+  - `Toast({ toast, onClose })`
+
+`frontend/src/components/MetricCard.jsx` (source)
+- Reusable KPI metric card.
+- Component:
+  - `MetricCard({ label, value, tone })`
+
+
+----------------------------------------
+frontend/src/views
+----------------------------------------
+
+`frontend/src/views/LoginView.jsx` (source)
+- Login/register/reset screen with mode-based form rendering.
+- Constants:
+  - `LOGIN_BRAND_IMAGE`
+- Component:
+  - `LoginView({...props})`
+
+`frontend/src/views/DashboardView.jsx` (source)
+- Dashboard KPI cards, weekday revenue chart, top-seller pie chart.
+- Helper functions:
+  - `polarToCartesian(cx, cy, r, angleDeg)`
+  - `arcPath(cx, cy, r, startAngle, endAngle)`
+  - `monthKeyFromDate(date)`
+  - `dateKeyFromDate(date)`
+  - `parseMonthKey(monthKey)`
+  - `monthLabel(monthKey)`
+  - `shortDateLabel(date)`
+  - `fullDateLabel(date)`
+  - `buildWeekOptions(monthKey)`
+- Component:
+  - `DashboardView({ stats, insights, sales })`
+
+`frontend/src/views/PosView.jsx` (source)
+- Product search/filter + cart/checkout panel.
+- Component:
+  - `PosView({...props})`
+
+`frontend/src/views/InventoryView.jsx` (source)
+- Inventory CRUD UI, archive/restore, category management.
+- Functions/components:
+  - `InventoryView({...props})`
+  - `handleCreateSection(event)`
+  - `handleUpdateSection(event)`
+  - `handleDeleteSection(sectionId)`
+  - `ProductTable({ title, rows, emptyLabel, renderActions })` (inner component)
+
+`frontend/src/views/SalesView.jsx` (source)
+- Sales table with expandable receipt details + email receipt action.
+- Component:
+  - `SalesView({...props})`
+
+`frontend/src/views/ReportsView.jsx` (source)
+- Report filters, KPI summary, trend chart rows, drill-down period details.
+- Helper functions:
+  - `toLocalIsoDate(date)`
+  - `formatSaleDateTime(value)`
+  - `saleItemSummary(items)`
+  - `togglePeriodDetails(periodLabel)` (fetches `/reports/details`)
+  - `formatPeriodLabel(label)` (daily/weekly/monthly/quarterly/yearly labels)
+- Component:
+  - `ReportsView({...props})`
+
+`frontend/src/views/PerformanceView.jsx` (source, currently not mounted in main nav)
+- Team performance ranking table.
+- Component:
+  - `PerformanceView({ performanceRows })`
+
+
+================================================================================
+INTEGRATION SUMMARY
+================================================================================
+
+Frontend API pattern
+- Frontend uses `frontend/src/lib/api.js`.
+- Hostname is derived from current browser URL.
+- Session auth uses cookies (`withCredentials: true`).
+
+Backend API mount
+- All app routes are under `/api/` via `backend/config/urls.py` -> `backend/core/urls.py`.
+
+Reporting drill-down path
+- Summary rows: `/api/reports`
+- Per-period details: `/api/reports/details`
+
+
+================================================================================
+LOCAL / GENERATED ITEMS YOU MAY SEE
+================================================================================
+
+Frontend
+- `frontend/node_modules/` (generated dependencies)
+- `frontend/dist/` (generated production build)
+
+Backend runtime
+- `backend/db.sqlite3` (local DB when created)
+- `**/__pycache__/` (Python bytecode caches)
+
+Local secrets/env
+- `.env`
+- `smtp.env`
+- `Gmail.env` (legacy)
+
+End of document.

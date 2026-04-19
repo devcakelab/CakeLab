@@ -20,6 +20,7 @@ class Product(models.Model):
     stock = models.IntegerField(default=0)
     low_stock_threshold = models.IntegerField(default=10)
     is_ingredient = models.BooleanField(default=False)
+    is_archived = models.BooleanField(default=False)
     section = models.ForeignKey(
         Section,
         null=True,
@@ -37,6 +38,13 @@ class Product(models.Model):
 
 
 class Sale(models.Model):
+    ORDER_TYPE_WALK_IN = "walk_in"
+    ORDER_TYPE_ONLINE = "online"
+    ORDER_TYPE_CHOICES = [
+        (ORDER_TYPE_WALK_IN, "Walk-in"),
+        (ORDER_TYPE_ONLINE, "Online"),
+    ]
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -45,6 +53,7 @@ class Sale(models.Model):
         related_name="sales",
     )
     customer_name = models.CharField(max_length=200, default="Walk-in Customer")
+    order_type = models.CharField(max_length=20, choices=ORDER_TYPE_CHOICES, default=ORDER_TYPE_WALK_IN)
     total = models.DecimalField(max_digits=12, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
 

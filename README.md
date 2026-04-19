@@ -13,6 +13,16 @@ The app includes:
 - Django REST API backend (`backend/`)
 - React frontend (`frontend/`)
 
+## Technical documentation
+
+This repo previously had an extended `DOCUMENTATION.txt` reference. Key highlights:
+
+- **Stack**: Django REST API (SQLite) + React (Vite)
+- **Frontend**: `http://localhost:5173`
+- **Backend API**: `http://127.0.0.1:8000/api`
+- **SMTP config file**: `.env` or `smtp.env` (both gitignored)
+- **Signature image**: set `SIGNATURE_IMAGE` or place `sig.png/jpg` at repo root
+
 ## Backend (Django API)
 
 1. `pip install -r requirements.txt`
@@ -44,7 +54,7 @@ From the project root:
 
 ## Auto-load SMTP/signature config
 
-To avoid setting PowerShell env vars every run, put values in a `.env` or `Gmail.env` file at the project root or under `backend/` (see `backend/core/views.py` for parsed keys). Start with `start_system.bat` or `python manage.py runserver` as usual. `Gmail.env` is listed in `.gitignore` so SMTP credentials stay on your machine only.
+To avoid setting PowerShell env vars every run, put values in a `.env` or `smtp.env` file at the project root or under `backend/` (see `backend/core/views.py` for parsed keys). `smtp.env` is listed in `.gitignore` so SMTP credentials stay on your machine only. (Legacy `Gmail.env` is still supported if you already have it locally.)
 
 ## API overview
 

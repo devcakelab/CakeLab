@@ -1,8 +1,9 @@
-import { formatCurrency } from "../lib/formatters";
+import { Fragment } from "react";
+import { formatCurrency } from "../lib/posUtils";
 
 export default function SalesView({
   sales,
-  fetchReceipt,
+  toggleReceipt,
   receipt,
   selectedSaleId,
   receiptEmail,
@@ -23,7 +24,6 @@ export default function SalesView({
           <table>
             <thead>
               <tr>
-                <th>ID</th>
                 <th>Date</th>
                 <th>Customer</th>
                 <th>Cashier</th>
@@ -34,67 +34,88 @@ export default function SalesView({
             <tbody>
               {sales.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="empty">
+                  <td colSpan="5" className="empty">
                     No sales yet.
                   </td>
                 </tr>
               ) : (
-                sales.map((sale) => (
-                  <tr key={sale.id}>
-                    <td>#{sale.id}</td>
-                    <td>{new Date(sale.created_at).toLocaleString()}</td>
-                    <td>{sale.customer_name}</td>
-                    <td>{sale.cashier_name}</td>
-                    <td>{formatCurrency(sale.total)}</td>
-                    <td>
-                      <div className="inline-actions">
-                        <button className="btn-ghost" onClick={() => fetchReceipt(sale.id)}>
-                          Receipt
-                        </button>
-                        <a
-                          className="btn-link"
-                          href={`${window.location.protocol}//${window.location.hostname}:8000/api/sales/${sale.id}/receipt.pdf`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          PDF
-                        </a>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                sales.flatMap((sale) => {
+                  const isOpen = selectedSaleId === sale.id;
+                  const hasReceipt = isOpen && receipt;
+                  return [
+                    <Fragment key={sale.id}>
+                      <tr>
+                        <td>{new Date(sale.created_at).toLocaleString()}</td>
+                        <td>{sale.customer_name}</td>
+                        <td>{sale.cashier_name}</td>
+                        <td>{formatCurrency(sale.total)}</td>
+                        <td>
+                          <div className="inline-actions">
+                            <button className="btn-ghost" onClick={() => toggleReceipt(sale.id)}>
+                              Receipt
+                            </button>
+                            <a
+                              className="btn-link"
+                              href={`${window.location.protocol}//${window.location.hostname}:8000/api/sales/${sale.id}/receipt.pdf`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              PDF
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                      {isOpen ? (
+                        <tr className="receipt-expand-row">
+                          <td colSpan="5">
+                            <div className={`receipt-expand ${hasReceipt ? "receipt-expand-open" : ""}`}>
+                              <div className="receipt-expand-inner">
+                                <h3 className="receipt-title">Receipt</h3>
+                                {hasReceipt ? (
+                                  <>
+                                    <div className="receipt-items">
+                                      {receipt.items?.map((item) => (
+                                        <p key={`${item.name}-${item.quantity}-${item.line_total}`}>
+                                          {item.name}: {item.quantity} x {formatCurrency(item.unit_price)} ={" "}
+                                          {formatCurrency(item.line_total)}
+                                        </p>
+                                      ))}
+                                    </div>
+                                    <div className="receipt-email-row">
+                                      <input
+                                        type="email"
+                                        placeholder="customer@email.com"
+                                        value={receiptEmail}
+                                        onChange={(e) => setReceiptEmail(e.target.value)}
+                                        aria-label="Receipt email"
+                                      />
+                                      <button className="btn-primary" onClick={sendReceiptEmail} disabled={busy}>
+                                        Email receipt
+                                      </button>
+                                    </div>
+                                    {receiptEmailStatus ? (
+                                      <p
+                                        className={`receipt-email-status receipt-email-status-${receiptEmailStatus.type}`}
+                                      >
+                                        {receiptEmailStatus.message}
+                                      </p>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  <p className="empty">Loading receipt…</p>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>,
+                  ];
+                })
               )}
             </tbody>
           </table>
         </div>
-
-        {receipt && selectedSaleId ? (
-          <section className="receipt-box">
-            <h3>Receipt #{selectedSaleId}</h3>
-            {receipt.items?.map((item) => (
-              <p key={`${item.name}-${item.quantity}-${item.line_total}`}>
-                {item.name}: {item.quantity} x {formatCurrency(item.unit_price)} = {formatCurrency(item.line_total)}
-              </p>
-            ))}
-            <div className="receipt-email-row">
-              <input
-                type="email"
-                placeholder="customer@email.com"
-                value={receiptEmail}
-                onChange={(e) => setReceiptEmail(e.target.value)}
-                aria-label="Receipt email"
-              />
-              <button className="btn-primary" onClick={sendReceiptEmail} disabled={busy}>
-                Email receipt
-              </button>
-            </div>
-            {receiptEmailStatus ? (
-              <p className={`receipt-email-status receipt-email-status-${receiptEmailStatus.type}`}>
-                {receiptEmailStatus.message}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
       </article>
     </section>
   );

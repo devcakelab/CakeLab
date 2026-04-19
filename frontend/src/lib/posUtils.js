@@ -1,3 +1,16 @@
+export function formatMoney(value) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) return "0.00";
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(numeric);
+}
+
+export function formatCurrency(value) {
+  return `Php ${formatMoney(value)}`;
+}
+
 export function buildSkuFromName(name) {
   const clean =
     String(name || "")

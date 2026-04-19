@@ -16,6 +16,7 @@ from .views import (
     sale_receipt_pdf_view,
     sale_receipt_email_view,
     sale_receipt_view,
+    sales_report_detail_view,
     sales_report_view,
     sales_view,
     section_detail_view,
@@ -43,5 +44,6 @@ urlpatterns = [
     path("dashboard/stats", dashboard_stats_view),
     path("dashboard/insights", dashboard_insights_view),
     path("reports", sales_report_view),
+    path("reports/details", sales_report_detail_view),
     path("users/performance", user_performance_view),
 ]

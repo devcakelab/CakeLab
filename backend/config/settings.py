@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import socket
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -31,7 +32,8 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-for env_file in (".env", "Gmail.env"):
+# Backward compatible: support both legacy Gmail.env and clearer smtp.env.
+for env_file in (".env", "smtp.env", "Gmail.env"):
     _load_dotenv(PROJECT_ROOT / env_file)
     _load_dotenv(BASE_DIR / env_file)
 
@@ -48,12 +50,58 @@ SECRET_KEY = os.environ.get(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
-CORS_ALLOWED_ORIGINS = [
+# Same-network / LAN: with DEBUG=True, accept any Host (your PC's LAN IP, hostname, etc.).
+# For production set DEBUG=False and DJANGO_ALLOWED_HOSTS=your.domain,another.host
+if DEBUG:
+    _explicit_hosts = os.environ.get("DJANGO_ALLOWED_HOSTS", "").strip()
+    ALLOWED_HOSTS = (
+        [h.strip() for h in _explicit_hosts.split(",") if h.strip()]
+        if _explicit_hosts
+        else ["*"]
+    )
+else:
+    _prod_hosts = os.environ.get("DJANGO_ALLOWED_HOSTS", "").strip()
+    ALLOWED_HOSTS = [h.strip() for h in _prod_hosts.split(",") if h.strip()]
+
+CORS_ALLOW_CREDENTIALS = True
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
+def _detect_lan_ip() -> str | None:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
+# Unsafe methods from the SPA need the dev server's origin here (including LAN IP).
+CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
-CORS_ALLOW_CREDENTIALS = True
+_extra_csrf = os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").strip()
+if _extra_csrf:
+    CSRF_TRUSTED_ORIGINS.extend(
+        o.strip() for o in _extra_csrf.split(",") if o.strip()
+    )
+if DEBUG:
+    _lan = _detect_lan_ip()
+    if _lan and not _lan.startswith("127."):
+        _vite_origin = f"http://{_lan}:5173"
+        if _vite_origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(_vite_origin)
 
 
 # Application definition

@@ -42,6 +42,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "stock",
             "low_stock_threshold",
             "is_ingredient",
+            "is_archived",
             "section",
             "section_name",
         ]
@@ -57,6 +58,7 @@ class CheckoutItemSerializer(serializers.Serializer):
 
 class CheckoutSerializer(serializers.Serializer):
     customer_name = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    order_type = serializers.ChoiceField(choices=["walk_in", "online"], required=False, default="walk_in")
     items = CheckoutItemSerializer(many=True)
 
 

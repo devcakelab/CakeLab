@@ -9,6 +9,7 @@ __pycache__/
 .env
 .env.*
 Gmail.env
+smtp.env
 
 # Django local DB
 backend/db.sqlite3

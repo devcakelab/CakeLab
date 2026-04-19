@@ -7,5 +7,6 @@ if not exist "node_modules" (
   npm.cmd install
 )
 
-echo Starting Vite frontend on http://localhost:5173
+echo Starting Vite with LAN access - use the Network URL line for other devices
+echo Local: http://localhost:5173
 npm.cmd run dev

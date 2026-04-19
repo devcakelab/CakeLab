@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from functools import wraps
 from io import BytesIO
@@ -15,7 +16,9 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import Count, F, Sum
+from django.db.models.deletion import ProtectedError
 from django.http import HttpRequest, HttpResponse
+from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
@@ -49,7 +52,8 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 
 def _runtime_env_value(key: str, default: str = "") -> str:
     env_values: dict[str, str] = {}
-    for file_name in (".env", "Gmail.env"):
+    # Backward compatible: support both legacy Gmail.env and clearer smtp.env.
+    for file_name in (".env", "smtp.env", "Gmail.env"):
         env_values.update(_parse_env_file(settings.BASE_DIR.parent / file_name))
         env_values.update(_parse_env_file(settings.BASE_DIR / file_name))
     if key in env_values and env_values[key] != "":
@@ -80,7 +84,8 @@ def api_root_view(request):
                 "/api/sales/<id>/receipt/email",
                 "/api/dashboard/stats",
                 "/api/dashboard/insights",
-                "/api/reports?period=daily|weekly|monthly",
+                "/api/reports?period=daily|weekly|monthly|quarterly|yearly",
+                "/api/reports/details?period=weekly&period_label=2026-W15",
                 "/api/users/performance",
             ],
         }
@@ -427,6 +432,7 @@ def me_view(request):
     return Response(UserProfileSerializer(user).data)
 
 
+@csrf_exempt
 @api_view(["GET", "POST"])
 def sections_view(request):
     if request.method == "GET":
@@ -440,6 +446,7 @@ def sections_view(request):
     return Response(SectionSerializer(section).data, status=status.HTTP_201_CREATED)
 
 
+@csrf_exempt
 @api_view(["PUT", "DELETE"])
 @login_required_api
 def section_detail_view(request, section_id: int):
@@ -467,19 +474,26 @@ def section_detail_view(request, section_id: int):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@csrf_exempt
 @api_view(["GET", "POST"])
 def products_view(request):
     if request.method == "GET":
+        include_archived = str(request.query_params.get("include_archived", "0")).lower() in {"1", "true", "yes", "on"}
         queryset = Product.objects.select_related("section").all()
+        if not include_archived:
+            queryset = queryset.filter(is_archived=False)
         return Response(ProductSerializer(queryset, many=True).data)
     if not _session_user(request):
         return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
     serializer = ProductSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
+    if serializer.validated_data.get("is_archived") is True:
+        return Response({"detail": "Archived products cannot be created."}, status=status.HTTP_400_BAD_REQUEST)
     product = serializer.save()
     return Response(ProductSerializer(product).data, status=status.HTTP_201_CREATED)
 
 
+@csrf_exempt
 @api_view(["PUT", "DELETE"])
 @login_required_api
 def product_detail_view(request, product_id: int):
@@ -488,7 +502,13 @@ def product_detail_view(request, product_id: int):
     except Product.DoesNotExist:
         return Response({"detail": "Product not found."}, status=status.HTTP_404_NOT_FOUND)
     if request.method == "DELETE":
-        product.delete()
+        try:
+          product.delete()
+        except ProtectedError:
+          return Response(
+              {"detail": "Cannot delete product because it is referenced by sales history."},
+              status=status.HTTP_400_BAD_REQUEST,
+          )
         return Response(status=status.HTTP_204_NO_CONTENT)
     serializer = ProductSerializer(product, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
@@ -505,12 +525,13 @@ def checkout_view(request):
     payload = serializer.validated_data
     items = payload["items"]
     customer_name = payload.get("customer_name", "").strip() or "Walk-in Customer"
+    order_type = str(payload.get("order_type", "walk_in")).strip() or "walk_in"
     user = _session_user(request)
     if not items:
         return Response({"detail": "Cart is empty."}, status=status.HTTP_400_BAD_REQUEST)
 
     with transaction.atomic():
-        sale = Sale.objects.create(user=user, customer_name=customer_name, total=Decimal("0.00"))
+        sale = Sale.objects.create(user=user, customer_name=customer_name, order_type=order_type, total=Decimal("0.00"))
         total = Decimal("0.00")
         for item in items:
             try:
@@ -638,25 +659,73 @@ def sale_receipt_email_view(request, sale_id: int):
     return Response({"detail": info})
 
 
-def _period_bucket(dt_value, period: str) -> str:
+def _period_bucket(dt_value, period: str, tzinfo=None) -> str:
+    local = timezone.localtime(dt_value, tzinfo) if tzinfo is not None else timezone.localtime(dt_value)
     if period == "daily":
-        return dt_value.strftime("%Y-%m-%d")
+        return local.strftime("%Y-%m-%d")
     if period == "weekly":
-        iso = dt_value.isocalendar()
+        iso = local.isocalendar()
         return f"{iso.year}-W{iso.week:02d}"
-    return dt_value.strftime("%Y-%m")
+    if period == "monthly":
+        return local.strftime("%Y-%m")
+    if period == "quarterly":
+        quarter = ((local.month - 1) // 3) + 1
+        return f"{local.year}-Q{quarter}"
+    return str(local.year)
 
 
 @api_view(["GET"])
 @login_required_api
 def sales_report_view(request):
     period = str(request.query_params.get("period", "daily")).lower()
-    if period not in {"daily", "weekly", "monthly"}:
+    if period not in {"daily", "weekly", "monthly", "quarterly", "yearly"}:
         return Response({"detail": "Invalid period."}, status=status.HTTP_400_BAD_REQUEST)
 
+    tzinfo = timezone.get_current_timezone()
+    raw_offset = str(request.query_params.get("tz_offset_minutes", "")).strip()
+    if raw_offset:
+        try:
+            tzinfo = timezone.get_fixed_timezone(-int(raw_offset))
+        except ValueError:
+            tzinfo = timezone.get_current_timezone()
+
+    start_date = None
+    end_date = None
+    if period == "daily":
+        raw_start = str(request.query_params.get("start_date", "")).strip()
+        raw_end = str(request.query_params.get("end_date", "")).strip()
+        raw_single = str(request.query_params.get("date", "")).strip()
+
+        if raw_single and not (raw_start or raw_end):
+            start_date = parse_date(raw_single)
+            end_date = start_date
+            if not start_date:
+                return Response({"detail": "Invalid date. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            if raw_start:
+                start_date = parse_date(raw_start)
+                if not start_date:
+                    return Response({"detail": "Invalid start_date. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+            if raw_end:
+                end_date = parse_date(raw_end)
+                if not end_date:
+                    return Response({"detail": "Invalid end_date. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+            if start_date and end_date and start_date > end_date:
+                return Response({"detail": "start_date must be before or equal to end_date."}, status=status.HTTP_400_BAD_REQUEST)
+
     grouped = defaultdict(lambda: {"sale_count": 0, "revenue": Decimal("0.00")})
-    for sale in Sale.objects.all().only("created_at", "total"):
-        key = _period_bucket(sale.created_at, period)
+    queryset = Sale.objects.all().only("created_at", "total")
+    if period == "daily":
+        if start_date:
+            start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tzinfo)
+            queryset = queryset.filter(created_at__gte=start_dt)
+        if end_date:
+            # End boundary is exclusive next-day midnight in local timezone.
+            end_exclusive_dt = timezone.make_aware(datetime.combine(end_date + timedelta(days=1), time.min), tzinfo)
+            queryset = queryset.filter(created_at__lt=end_exclusive_dt)
+
+    for sale in queryset:
+        key = _period_bucket(sale.created_at, period, tzinfo=tzinfo)
         grouped[key]["sale_count"] += 1
         grouped[key]["revenue"] += sale.total
 
@@ -670,6 +739,101 @@ def sales_report_view(request):
             }
         )
     return Response(rows)
+
+
+def _period_bounds(period: str, label: str):
+    if period == "daily":
+        day = parse_date(label)
+        if not day:
+            return None, None
+        return day, day + timedelta(days=1)
+
+    if period == "weekly":
+        match = re.fullmatch(r"(\d{4})-W(\d{2})", label)
+        if not match:
+            return None, None
+        year = int(match.group(1))
+        week = int(match.group(2))
+        try:
+            start = datetime.fromisocalendar(year, week, 1).date()
+        except ValueError:
+            return None, None
+        return start, start + timedelta(days=7)
+
+    if period == "monthly":
+        match = re.fullmatch(r"(\d{4})-(\d{2})", label)
+        if not match:
+            return None, None
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if month < 1 or month > 12:
+            return None, None
+        start = datetime(year, month, 1).date()
+        if month == 12:
+            end = datetime(year + 1, 1, 1).date()
+        else:
+            end = datetime(year, month + 1, 1).date()
+        return start, end
+
+    if period == "quarterly":
+        match = re.fullmatch(r"(\d{4})-Q([1-4])", label)
+        if not match:
+            return None, None
+        year = int(match.group(1))
+        quarter = int(match.group(2))
+        start_month = ((quarter - 1) * 3) + 1
+        start = datetime(year, start_month, 1).date()
+        if quarter == 4:
+            end = datetime(year + 1, 1, 1).date()
+        else:
+            end = datetime(year, start_month + 3, 1).date()
+        return start, end
+
+    if period == "yearly":
+        match = re.fullmatch(r"\d{4}", label)
+        if not match:
+            return None, None
+        year = int(label)
+        start = datetime(year, 1, 1).date()
+        end = datetime(year + 1, 1, 1).date()
+        return start, end
+
+    return None, None
+
+
+@api_view(["GET"])
+@login_required_api
+def sales_report_detail_view(request):
+    period = str(request.query_params.get("period", "daily")).lower()
+    if period not in {"daily", "weekly", "monthly", "quarterly", "yearly"}:
+        return Response({"detail": "Invalid period."}, status=status.HTTP_400_BAD_REQUEST)
+
+    period_label = str(request.query_params.get("period_label", "")).strip()
+    if not period_label:
+        return Response({"detail": "period_label is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    tzinfo = timezone.get_current_timezone()
+    raw_offset = str(request.query_params.get("tz_offset_minutes", "")).strip()
+    if raw_offset:
+        try:
+            tzinfo = timezone.get_fixed_timezone(-int(raw_offset))
+        except ValueError:
+            tzinfo = timezone.get_current_timezone()
+
+    start_date, end_date = _period_bounds(period, period_label)
+    if not start_date or not end_date:
+        return Response({"detail": "Invalid period_label for selected period."}, status=status.HTTP_400_BAD_REQUEST)
+
+    start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tzinfo)
+    end_dt = timezone.make_aware(datetime.combine(end_date, time.min), tzinfo)
+
+    queryset = (
+        Sale.objects.select_related("user")
+        .prefetch_related("items__product")
+        .filter(created_at__gte=start_dt, created_at__lt=end_dt)
+        .order_by("-created_at")[:300]
+    )
+    return Response(SaleSerializer(queryset, many=True).data)
 
 
 def _dessert_icon(name: str) -> str:

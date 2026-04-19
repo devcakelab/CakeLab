@@ -4,5 +4,4 @@ export const NAV_ITEMS = [
   { id: "inventory", label: "Inventory", icon: "📦" },
   { id: "sales", label: "Sales", icon: "🧾" },
   { id: "reports", label: "Reports", icon: "📊" },
-  { id: "performance", label: "Team Performance", icon: "👥" },
 ];

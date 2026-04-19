@@ -2,11 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import Toast from "./components/Toast";
 import { NAV_ITEMS } from "./constants/navigation";
 import { api } from "./lib/api";
-import { buildSkuFromName } from "./lib/product";
+import { buildSkuFromName } from "./lib/posUtils";
 import DashboardView from "./views/DashboardView";
 import InventoryView from "./views/InventoryView";
 import LoginView from "./views/LoginView";
-import PerformanceView from "./views/PerformanceView";
 import PosView from "./views/PosView";
 import ReportsView from "./views/ReportsView";
 import SalesView from "./views/SalesView";
@@ -39,7 +38,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [authMode, setAuthMode] = useState("login");
 
-  const [loginForm, setLoginForm] = useState({ username: "admin", password: "admin123" });
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [registerForm, setRegisterForm] = useState(EMPTY_REGISTER_FORM);
   const [resetForm, setResetForm] = useState(EMPTY_RESET_FORM);
 
@@ -50,11 +49,15 @@ export default function App() {
   const [sales, setSales] = useState([]);
   const [reportRows, setReportRows] = useState([]);
   const [reportPeriod, setReportPeriod] = useState("daily");
-  const [performanceRows, setPerformanceRows] = useState([]);
+  const [reportStartDate, setReportStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [reportEndDate, setReportEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Team Performance removed from UI; keep backend endpoint untouched.
 
   const [searchTerm, setSearchTerm] = useState("");
   const [sectionFilter, setSectionFilter] = useState("all");
   const [cart, setCart] = useState([]);
+  const [posCustomerName, setPosCustomerName] = useState("");
+  const [posOrderType, setPosOrderType] = useState("walk_in");
 
   const [selectedSaleId, setSelectedSaleId] = useState(null);
   const [receipt, setReceipt] = useState(null);
@@ -70,14 +73,19 @@ export default function App() {
   const madeProducts = useMemo(() => products.filter((product) => !product.is_ingredient), [products]);
   const ingredientProducts = useMemo(() => products.filter((product) => product.is_ingredient), [products]);
 
+  const activeMadeProducts = useMemo(() => madeProducts.filter((p) => !p.is_archived), [madeProducts]);
+  const activeIngredientProducts = useMemo(() => ingredientProducts.filter((p) => !p.is_archived), [ingredientProducts]);
+  const archivedMadeProducts = useMemo(() => madeProducts.filter((p) => p.is_archived), [madeProducts]);
+  const archivedIngredientProducts = useMemo(() => ingredientProducts.filter((p) => p.is_archived), [ingredientProducts]);
+
   const filteredProducts = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    return madeProducts.filter((product) => {
+    return activeMadeProducts.filter((product) => {
       const matchSearch = q.length === 0 || product.name.toLowerCase().includes(q);
       const matchSection = sectionFilter === "all" || String(product.section || "") === sectionFilter;
       return matchSearch && matchSection;
     });
-  }, [madeProducts, searchTerm, sectionFilter]);
+  }, [activeMadeProducts, searchTerm, sectionFilter]);
 
   const showToast = (message, type = "info") => setToast({ message, type });
 
@@ -88,7 +96,7 @@ export default function App() {
   }, [toast]);
 
   async function loadProducts() {
-    const res = await api.get("/products");
+    const res = await api.get("/products?include_archived=1");
     setProducts(res.data);
   }
 
@@ -124,21 +132,18 @@ export default function App() {
     }
   }
 
-  async function loadReport(period = reportPeriod) {
+  async function loadReport(period = reportPeriod, startDate = reportStartDate, endDate = reportEndDate) {
     try {
-      const res = await api.get(`/reports?period=${period}`);
+      const query = new URLSearchParams({ period });
+      query.set("tz_offset_minutes", String(new Date().getTimezoneOffset()));
+      if (period === "daily") {
+        if (startDate) query.set("start_date", startDate);
+        if (endDate) query.set("end_date", endDate);
+      }
+      const res = await api.get(`/reports?${query.toString()}`);
       setReportRows(res.data);
     } catch {
       setReportRows([]);
-    }
-  }
-
-  async function loadPerformance() {
-    try {
-      const res = await api.get("/users/performance");
-      setPerformanceRows(res.data);
-    } catch {
-      setPerformanceRows([]);
     }
   }
 
@@ -152,7 +157,12 @@ export default function App() {
   }
 
   async function loadPrivateData() {
-    await Promise.all([loadStats(), loadInsights(), loadSales(), loadReport(reportPeriod), loadPerformance()]);
+    await Promise.all([
+      loadStats(),
+      loadInsights(),
+      loadSales(),
+      loadReport(reportPeriod, reportStartDate, reportEndDate),
+    ]);
   }
 
   useEffect(() => {
@@ -176,7 +186,6 @@ export default function App() {
     setInsights(null);
     setSales([]);
     setReportRows([]);
-    setPerformanceRows([]);
     setReceipt(null);
     setSelectedSaleId(null);
   }, [user]);
@@ -270,9 +279,15 @@ export default function App() {
 
     setBusy(true);
     try {
-      const payload = { customer_name: "Walk-in Customer", items: cart.map((item) => ({ product_id: item.id, quantity: item.quantity })) };
+      const payload = {
+        customer_name: posCustomerName.trim(),
+        order_type: posOrderType,
+        items: cart.map((item) => ({ product_id: item.id, quantity: item.quantity })),
+      };
       const res = await api.post("/checkout", payload);
       setCart([]);
+      setPosCustomerName("");
+      setPosOrderType("walk_in");
       showToast(`Checkout completed. Sale #${res.data.sale_id}`, "success");
       await Promise.all([loadProducts(), loadPrivateData()]);
       setActiveTab("sales");
@@ -316,6 +331,44 @@ export default function App() {
       await Promise.all([loadProducts(), loadStats()]);
     } catch (err) {
       showToast(err.response?.data?.detail || "Failed to delete product.", "error");
+    }
+  }
+
+  async function archiveProduct(productId, productName) {
+    if (!window.confirm(`Archive ${productName}? It will be hidden from POS and Inventory.`)) return;
+    try {
+      await api.put(`/products/${productId}`, { is_archived: true });
+      showToast("Product archived.", "success");
+      await Promise.all([loadProducts(), loadStats()]);
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Failed to archive product.", "error");
+    }
+  }
+
+  async function restoreProduct(productId, productName) {
+    if (!window.confirm(`Restore ${productName}? It will be visible again.`)) return;
+    try {
+      await api.put(`/products/${productId}`, { is_archived: false });
+      showToast("Product restored.", "success");
+      await Promise.all([loadProducts(), loadStats()]);
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Failed to restore product.", "error");
+    }
+  }
+
+  async function restockProduct(productId, productName, currentStock) {
+    const raw = window.prompt(`Restock ${productName}\n\nCurrent stock: ${currentStock}\nEnter quantity to add:`, "0");
+    if (raw === null) return;
+    const qty = Number(raw);
+    if (!Number.isFinite(qty) || qty <= 0) return showToast("Please enter a valid restock quantity.", "error");
+
+    try {
+      const nextStock = Number(currentStock) + qty;
+      await api.put(`/products/${productId}`, { stock: nextStock });
+      showToast("Product restocked.", "success");
+      await Promise.all([loadProducts(), loadStats()]);
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Failed to restock product.", "error");
     }
   }
 
@@ -364,6 +417,21 @@ export default function App() {
     }
   }
 
+  function clearReceipt() {
+    setSelectedSaleId(null);
+    setReceipt(null);
+    setReceiptEmail("");
+    setReceiptEmailStatus(null);
+  }
+
+  function toggleReceipt(saleId) {
+    if (selectedSaleId === saleId) {
+      clearReceipt();
+      return;
+    }
+    fetchReceipt(saleId);
+  }
+
   async function sendReceiptEmail() {
     if (!selectedSaleId) return;
     if (!receiptEmail.trim()) return showToast("Enter an email address first.", "error");
@@ -383,7 +451,7 @@ export default function App() {
   }
 
   const viewByTab = {
-    dashboard: <DashboardView stats={stats} insights={insights} />,
+    dashboard: <DashboardView stats={stats} insights={insights} sales={sales} />,
     pos: (
       <PosView
         searchTerm={searchTerm}
@@ -398,6 +466,10 @@ export default function App() {
         removeCartItem={removeCartItem}
         cartTotal={cartTotal}
         setCart={setCart}
+        customerName={posCustomerName}
+        setCustomerName={setPosCustomerName}
+        orderType={posOrderType}
+        setOrderType={setPosOrderType}
         checkout={checkout}
         busy={busy}
       />
@@ -409,9 +481,14 @@ export default function App() {
         createProduct={createProduct}
         sections={sections}
         busy={busy}
-        madeProducts={madeProducts}
-        ingredientProducts={ingredientProducts}
+        madeProducts={activeMadeProducts}
+        ingredientProducts={activeIngredientProducts}
+        archivedMadeProducts={archivedMadeProducts}
+        archivedIngredientProducts={archivedIngredientProducts}
         deleteProduct={deleteProduct}
+        archiveProduct={archiveProduct}
+        restoreProduct={restoreProduct}
+        restockProduct={restockProduct}
         createSection={createSection}
         updateSection={updateSection}
         deleteSection={deleteSection}
@@ -420,7 +497,7 @@ export default function App() {
     sales: (
       <SalesView
         sales={sales}
-        fetchReceipt={fetchReceipt}
+        toggleReceipt={toggleReceipt}
         receipt={receipt}
         selectedSaleId={selectedSaleId}
         receiptEmail={receiptEmail}
@@ -435,11 +512,13 @@ export default function App() {
         reportRows={reportRows}
         reportPeriod={reportPeriod}
         setReportPeriod={setReportPeriod}
+        reportStartDate={reportStartDate}
+        setReportStartDate={setReportStartDate}
+        reportEndDate={reportEndDate}
+        setReportEndDate={setReportEndDate}
         loadReport={loadReport}
-        insights={insights}
       />
     ),
-    performance: <PerformanceView performanceRows={performanceRows} />,
   };
 
   if (loading) return <main className="loading-screen">Loading CakeLab...</main>;
