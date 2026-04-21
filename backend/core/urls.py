@@ -1,6 +1,10 @@
 from django.urls import path
 
 from .views import (
+    account_delete_view,
+    account_role_view,
+    accounts_view,
+    approve_pending_order_view,
     api_root_view,
     checkout_view,
     dashboard_insights_view,
@@ -13,6 +17,7 @@ from .views import (
     products_view,
     register_view,
     reset_password_view,
+    reject_pending_order_view,
     sale_receipt_pdf_view,
     sale_receipt_email_view,
     sale_receipt_view,
@@ -21,6 +26,7 @@ from .views import (
     sales_view,
     section_detail_view,
     sections_view,
+    pending_orders_view,
     user_performance_view,
 )
 
@@ -31,6 +37,9 @@ urlpatterns = [
     path("auth/logout", logout_view),
     path("auth/me", me_view),
     path("auth/reset-password", reset_password_view),
+    path("accounts", accounts_view),
+    path("accounts/<int:user_id>", account_delete_view),
+    path("accounts/<int:user_id>/role", account_role_view),
     path("sections", sections_view),
     path("sections/<int:section_id>", section_detail_view),
     path("products", products_view),
@@ -38,6 +47,9 @@ urlpatterns = [
     path("products/<int:product_id>", product_detail_view),
     path("checkout", checkout_view),
     path("sales", sales_view),
+    path("orders/pending", pending_orders_view),
+    path("orders/<int:order_id>/approve", approve_pending_order_view),
+    path("orders/<int:order_id>/reject", reject_pending_order_view),
     path("sales/<int:sale_id>", sale_receipt_view),
     path("sales/<int:sale_id>/receipt.pdf", sale_receipt_pdf_view),
     path("sales/<int:sale_id>/receipt/email", sale_receipt_email_view),

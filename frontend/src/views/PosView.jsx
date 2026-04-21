@@ -1,6 +1,10 @@
 import { formatCurrency, productIcon } from "../lib/posUtils";
 
 export default function PosView({
+  userRole,
+  pendingOrders,
+  approvePendingOrder,
+  rejectPendingOrder,
   searchTerm,
   setSearchTerm,
   sectionFilter,
@@ -20,12 +24,69 @@ export default function PosView({
   checkout,
   busy,
 }) {
+  const canReviewPendingOrders = userRole === "admin" || userRole === "cashier";
+
   return (
     <section className="view">
       <header className="view-header">
         <h2>Point of Sale</h2>
         <p className="muted">Search quickly and keep checkout visible at all times.</p>
       </header>
+
+      {canReviewPendingOrders ? (
+        <article className="panel">
+          <h3>Customer Orders</h3>
+          {pendingOrders.length === 0 ? (
+            <p className="muted">No pending orders.</p>
+          ) : (
+            <div className="stack" style={{ gap: 12 }}>
+              {pendingOrders.map((order) => (
+                <div
+                  key={order.id}
+                  style={{ border: "1px solid rgba(107, 114, 128, 0.25)", borderRadius: 10, padding: 12 }}
+                >
+                  <p>
+                    <strong>Order #{order.id}</strong> - {order.customer_name} ({order.order_type})
+                  </p>
+                  <p className="muted" style={{ marginTop: 6 }}>
+                    Requested by {order.created_by_name} - Total {formatCurrency(order.total)}
+                  </p>
+                  <div className="table-wrap" style={{ marginTop: 10 }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Item</th>
+                          <th>Qty</th>
+                          <th>Unit Price</th>
+                          <th>Line Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {order.items?.map((item, idx) => (
+                          <tr key={`${order.id}-${item.sku || item.name}-${idx}`}>
+                            <td>{item.name}</td>
+                            <td>{item.quantity}</td>
+                            <td>{formatCurrency(item.unit_price)}</td>
+                            <td>{formatCurrency(item.line_total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="inline-actions" style={{ marginTop: 12 }}>
+                    <button className="btn-primary" onClick={() => approvePendingOrder(order.id)} disabled={busy}>
+                      Approve
+                    </button>
+                    <button className="btn-danger" onClick={() => rejectPendingOrder(order.id)} disabled={busy}>
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+      ) : null}
 
       <div className="pos-layout">
         <article className="panel">

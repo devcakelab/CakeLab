@@ -2,6 +2,23 @@ from django.conf import settings
 from django.db import models
 
 
+class UserProfile(models.Model):
+    ROLE_ADMIN = "admin"
+    ROLE_CASHIER = "cashier"
+    ROLE_GUEST = "guest"
+    ROLE_CHOICES = [
+        (ROLE_ADMIN, "System Admin"),
+        (ROLE_CASHIER, "Cashier"),
+        (ROLE_GUEST, "Guest"),
+    ]
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_CASHIER)
+
+    def __str__(self) -> str:
+        return f"{self.user.username} ({self.role})"
+
+
 class Section(models.Model):
     name = models.CharField(max_length=120, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -67,3 +84,50 @@ class SaleItem(models.Model):
     quantity = models.PositiveIntegerField()
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     line_total = models.DecimalField(max_digits=12, decimal_places=2)
+
+
+class PendingOrder(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_pending_orders",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_pending_orders",
+    )
+    customer_name = models.CharField(max_length=200, default="Walk-in Customer")
+    order_type = models.CharField(max_length=20, choices=Sale.ORDER_TYPE_CHOICES, default=Sale.ORDER_TYPE_WALK_IN)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    approved_sale = models.ForeignKey(
+        Sale,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="source_pending_orders",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+
+class PendingOrderItem(models.Model):
+    pending_order = models.ForeignKey(PendingOrder, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="pending_order_items")
+    quantity = models.PositiveIntegerField()

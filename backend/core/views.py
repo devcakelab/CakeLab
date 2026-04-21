@@ -25,9 +25,10 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Product, Sale, SaleItem, Section
+from .models import PendingOrder, PendingOrderItem, Product, Sale, SaleItem, Section, UserProfile
 from .serializers import (
     CheckoutSerializer,
+    PendingOrderSerializer,
     ProductSerializer,
     RegisterSerializer,
     SaleSerializer,
@@ -87,6 +88,9 @@ def api_root_view(request):
                 "/api/reports?period=daily|weekly|monthly|quarterly|yearly",
                 "/api/reports/details?period=weekly&period_label=2026-W15",
                 "/api/users/performance",
+                "/api/accounts",
+                "/api/accounts/<id>/role",
+                "/api/accounts/<id>",
             ],
         }
     )
@@ -110,6 +114,26 @@ def login_required_api(func):
         return func(request, *args, **kwargs)
 
     return wrapper
+
+
+def _user_role(user: User | None) -> str:
+    if not user:
+        return UserProfile.ROLE_GUEST
+    if hasattr(user, "profile") and user.profile:
+        return user.profile.role
+    if user.is_superuser:
+        return UserProfile.ROLE_ADMIN
+    return UserProfile.ROLE_CASHIER
+
+
+def _has_any_role(request: HttpRequest, allowed_roles: set[str]) -> bool:
+    return _user_role(_session_user(request)) in allowed_roles
+
+
+def _ensure_profile(user: User) -> UserProfile:
+    role = UserProfile.ROLE_ADMIN if user.is_superuser else UserProfile.ROLE_CASHIER
+    profile, _ = UserProfile.objects.get_or_create(user=user, defaults={"role": role})
+    return profile
 
 
 def _authorized_by(request: HttpRequest, sale: Sale) -> str:
@@ -376,6 +400,7 @@ def register_view(request):
         password=payload["password"],
         first_name=payload["full_name"].strip(),
     )
+    UserProfile.objects.create(user=user, role=payload.get("role", UserProfile.ROLE_CASHIER))
     return Response(UserProfileSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
@@ -429,7 +454,91 @@ def me_view(request):
     user = _session_user(request)
     if not user:
         return Response({"detail": "Not logged in."}, status=status.HTTP_401_UNAUTHORIZED)
+    _ensure_profile(user)
     return Response(UserProfileSerializer(user).data)
+
+
+@api_view(["GET"])
+@login_required_api
+def accounts_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can access accounts."}, status=status.HTTP_403_FORBIDDEN)
+    users = User.objects.all().order_by("username")
+    for user in users:
+        _ensure_profile(user)
+    data = []
+    for user in users:
+        data.append(
+            {
+                "id": user.id,
+                "username": user.username,
+                "full_name": user.first_name or user.get_full_name() or user.username,
+                "role": user.profile.role,
+            }
+        )
+    return Response(data)
+
+
+@csrf_exempt
+@api_view(["PUT"])
+@login_required_api
+def account_role_view(request, user_id: int):
+    actor = _session_user(request)
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can update account roles."}, status=status.HTTP_403_FORBIDDEN)
+    if not actor:
+        return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    role = str(request.data.get("role", "")).strip().lower()
+    allowed = {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER, UserProfile.ROLE_GUEST}
+    if role not in allowed:
+        return Response({"detail": "Invalid role."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        target = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    profile = _ensure_profile(target)
+    current_role = profile.role
+    if current_role == role:
+        return Response({"detail": "Role unchanged."})
+
+    admin_count = UserProfile.objects.filter(role=UserProfile.ROLE_ADMIN).count()
+    if current_role == UserProfile.ROLE_ADMIN and role != UserProfile.ROLE_ADMIN and admin_count <= 1:
+        return Response({"detail": "At least one admin account must remain."}, status=status.HTTP_400_BAD_REQUEST)
+
+    profile.role = role
+    profile.save(update_fields=["role"])
+    return Response({"detail": "Role updated.", "user": UserProfileSerializer(target).data})
+
+
+@csrf_exempt
+@api_view(["DELETE"])
+@login_required_api
+def account_delete_view(request, user_id: int):
+    actor = _session_user(request)
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can delete accounts."}, status=status.HTTP_403_FORBIDDEN)
+    if not actor:
+        return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        target = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if target.id == actor.id:
+        return Response({"detail": "You cannot delete your own account."}, status=status.HTTP_400_BAD_REQUEST)
+
+    profile = _ensure_profile(target)
+    if profile.role == UserProfile.ROLE_ADMIN:
+        admin_count = UserProfile.objects.filter(role=UserProfile.ROLE_ADMIN).count()
+        if admin_count <= 1:
+            return Response({"detail": "At least one admin account must remain."}, status=status.HTTP_400_BAD_REQUEST)
+
+    target.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @csrf_exempt
@@ -439,6 +548,8 @@ def sections_view(request):
         return Response(SectionSerializer(Section.objects.all(), many=True).data)
     if not _session_user(request):
         return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can manage sections."}, status=status.HTTP_403_FORBIDDEN)
     name = str(request.data.get("name", "")).strip()
     if not name:
         return Response({"detail": "Section name is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -450,6 +561,8 @@ def sections_view(request):
 @api_view(["PUT", "DELETE"])
 @login_required_api
 def section_detail_view(request, section_id: int):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can manage sections."}, status=status.HTTP_403_FORBIDDEN)
     try:
         section = Section.objects.get(id=section_id)
     except Section.DoesNotExist:
@@ -485,6 +598,8 @@ def products_view(request):
         return Response(ProductSerializer(queryset, many=True).data)
     if not _session_user(request):
         return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can manage products."}, status=status.HTTP_403_FORBIDDEN)
     serializer = ProductSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     if serializer.validated_data.get("is_archived") is True:
@@ -497,6 +612,8 @@ def products_view(request):
 @api_view(["PUT", "DELETE"])
 @login_required_api
 def product_detail_view(request, product_id: int):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can manage products."}, status=status.HTTP_403_FORBIDDEN)
     try:
         product = Product.objects.get(id=product_id)
     except Product.DoesNotExist:
@@ -516,6 +633,34 @@ def product_detail_view(request, product_id: int):
     return Response(serializer.data)
 
 
+def _create_sale(user: User | None, customer_name: str, order_type: str, items: list[dict]) -> Sale:
+    sale = Sale.objects.create(user=user, customer_name=customer_name, order_type=order_type, total=Decimal("0.00"))
+    total = Decimal("0.00")
+    for item in items:
+        try:
+            product = Product.objects.select_for_update().get(id=item["product_id"])
+        except Product.DoesNotExist as exc:
+            raise ValueError("Product not found in checkout.") from exc
+        qty = int(item["quantity"])
+        if product.stock < qty:
+            raise ValueError(f"Insufficient stock for {product.sku}. Available: {product.stock}")
+        unit_price = product.price
+        line_total = unit_price * qty
+        total += line_total
+        SaleItem.objects.create(
+            sale=sale,
+            product=product,
+            quantity=qty,
+            unit_price=unit_price,
+            line_total=line_total,
+        )
+        product.stock -= qty
+        product.save(update_fields=["stock"])
+    sale.total = total
+    sale.save(update_fields=["total"])
+    return sale
+
+
 @csrf_exempt
 @api_view(["POST"])
 @login_required_api
@@ -527,37 +672,45 @@ def checkout_view(request):
     customer_name = payload.get("customer_name", "").strip() or "Walk-in Customer"
     order_type = str(payload.get("order_type", "walk_in")).strip() or "walk_in"
     user = _session_user(request)
+    role = _user_role(user)
     if not items:
         return Response({"detail": "Cart is empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-    with transaction.atomic():
-        sale = Sale.objects.create(user=user, customer_name=customer_name, order_type=order_type, total=Decimal("0.00"))
-        total = Decimal("0.00")
-        for item in items:
-            try:
-                product = Product.objects.select_for_update().get(id=item["product_id"])
-            except Product.DoesNotExist:
-                return Response({"detail": "Product not found in checkout."}, status=status.HTTP_400_BAD_REQUEST)
-            qty = int(item["quantity"])
-            if product.stock < qty:
-                return Response(
-                    {"detail": f"Insufficient stock for {product.sku}. Available: {product.stock}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            unit_price = product.price
-            line_total = unit_price * qty
-            total += line_total
-            SaleItem.objects.create(
-                sale=sale,
-                product=product,
-                quantity=qty,
-                unit_price=unit_price,
-                line_total=line_total,
+    if role == UserProfile.ROLE_GUEST:
+        with transaction.atomic():
+            pending_order = PendingOrder.objects.create(
+                created_by=user,
+                customer_name=customer_name,
+                order_type=order_type,
+                status=PendingOrder.STATUS_PENDING,
             )
-            product.stock -= qty
-            product.save(update_fields=["stock"])
-        sale.total = total
-        sale.save(update_fields=["total"])
+            for item in items:
+                try:
+                    product = Product.objects.get(id=item["product_id"])
+                except Product.DoesNotExist:
+                    return Response({"detail": "Product not found in checkout."}, status=status.HTTP_400_BAD_REQUEST)
+                PendingOrderItem.objects.create(
+                    pending_order=pending_order,
+                    product=product,
+                    quantity=int(item["quantity"]),
+                )
+        return Response(
+            {
+                "detail": "Order submitted for cashier/admin approval.",
+                "pending_order_id": pending_order.id,
+                "status": pending_order.status,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    if role not in {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER}:
+        return Response({"detail": "You are not allowed to checkout."}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        with transaction.atomic():
+            sale = _create_sale(user=user, customer_name=customer_name, order_type=order_type, items=items)
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response({"sale_id": sale.id, "total": to_money(sale.total)}, status=status.HTTP_201_CREATED)
 
@@ -565,13 +718,87 @@ def checkout_view(request):
 @api_view(["GET"])
 @login_required_api
 def sales_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER}):
+        return Response({"detail": "Only admins and cashiers can access sales."}, status=status.HTTP_403_FORBIDDEN)
     queryset = Sale.objects.select_related("user").prefetch_related("items__product").all()[:200]
     return Response(SaleSerializer(queryset, many=True).data)
 
 
 @api_view(["GET"])
 @login_required_api
+def pending_orders_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER}):
+        return Response({"detail": "Only admins and cashiers can access pending orders."}, status=status.HTTP_403_FORBIDDEN)
+    queryset = (
+        PendingOrder.objects.select_related("created_by", "approved_by", "approved_sale")
+        .prefetch_related("items__product")
+        .filter(status=PendingOrder.STATUS_PENDING)[:200]
+    )
+    return Response(PendingOrderSerializer(queryset, many=True).data)
+
+
+@csrf_exempt
+@api_view(["POST"])
+@login_required_api
+def approve_pending_order_view(request, order_id: int):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER}):
+        return Response({"detail": "Only admins and cashiers can approve orders."}, status=status.HTTP_403_FORBIDDEN)
+    actor = _session_user(request)
+    try:
+        pending_order = PendingOrder.objects.select_related("created_by").prefetch_related("items__product").get(id=order_id)
+    except PendingOrder.DoesNotExist:
+        return Response({"detail": "Pending order not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if pending_order.status != PendingOrder.STATUS_PENDING:
+        return Response({"detail": "This order is already processed."}, status=status.HTTP_400_BAD_REQUEST)
+
+    items = [{"product_id": item.product_id, "quantity": item.quantity} for item in pending_order.items.all()]
+    try:
+        with transaction.atomic():
+            sale = _create_sale(
+                user=actor,
+                customer_name=pending_order.customer_name,
+                order_type=pending_order.order_type,
+                items=items,
+            )
+            pending_order.status = PendingOrder.STATUS_APPROVED
+            pending_order.approved_by = actor
+            pending_order.approved_sale = sale
+            pending_order.approved_at = timezone.now()
+            pending_order.save(update_fields=["status", "approved_by", "approved_sale", "approved_at"])
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({"detail": "Order approved.", "sale_id": sale.id})
+
+
+@csrf_exempt
+@api_view(["POST"])
+@login_required_api
+def reject_pending_order_view(request, order_id: int):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER}):
+        return Response({"detail": "Only admins and cashiers can reject orders."}, status=status.HTTP_403_FORBIDDEN)
+    actor = _session_user(request)
+    try:
+        pending_order = PendingOrder.objects.get(id=order_id)
+    except PendingOrder.DoesNotExist:
+        return Response({"detail": "Pending order not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if pending_order.status != PendingOrder.STATUS_PENDING:
+        return Response({"detail": "This order is already processed."}, status=status.HTTP_400_BAD_REQUEST)
+
+    pending_order.status = PendingOrder.STATUS_REJECTED
+    pending_order.approved_by = actor
+    pending_order.approved_at = timezone.now()
+    pending_order.save(update_fields=["status", "approved_by", "approved_at"])
+    return Response({"detail": "Order rejected."})
+
+
+@api_view(["GET"])
+@login_required_api
 def dashboard_stats_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can access dashboard stats."}, status=status.HTTP_403_FORBIDDEN)
     total_products = Product.objects.count()
     low_stock_count = Product.objects.filter(stock__lte=F("low_stock_threshold")).count()
     sales_agg = Sale.objects.aggregate(total_sales=Count("id"), gross_revenue=Sum("total"))
@@ -599,6 +826,8 @@ def dashboard_stats_view(request):
 @api_view(["GET"])
 @login_required_api
 def low_stock_products_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can access low-stock data."}, status=status.HTTP_403_FORBIDDEN)
     queryset = Product.objects.select_related("section").filter(stock__lte=F("low_stock_threshold"))
     return Response(ProductSerializer(queryset, many=True).data)
 
@@ -677,6 +906,8 @@ def _period_bucket(dt_value, period: str, tzinfo=None) -> str:
 @api_view(["GET"])
 @login_required_api
 def sales_report_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER}):
+        return Response({"detail": "Only admins and cashiers can access reports."}, status=status.HTTP_403_FORBIDDEN)
     period = str(request.query_params.get("period", "daily")).lower()
     if period not in {"daily", "weekly", "monthly", "quarterly", "yearly"}:
         return Response({"detail": "Invalid period."}, status=status.HTTP_400_BAD_REQUEST)
@@ -804,6 +1035,8 @@ def _period_bounds(period: str, label: str):
 @api_view(["GET"])
 @login_required_api
 def sales_report_detail_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN, UserProfile.ROLE_CASHIER}):
+        return Response({"detail": "Only admins and cashiers can access report details."}, status=status.HTTP_403_FORBIDDEN)
     period = str(request.query_params.get("period", "daily")).lower()
     if period not in {"daily", "weekly", "monthly", "quarterly", "yearly"}:
         return Response({"detail": "Invalid period."}, status=status.HTTP_400_BAD_REQUEST)
@@ -856,6 +1089,8 @@ def _dessert_icon(name: str) -> str:
 @api_view(["GET"])
 @login_required_api
 def dashboard_insights_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can access dashboard insights."}, status=status.HTTP_403_FORBIDDEN)
     top_rows = (
         SaleItem.objects.select_related("product")
         .values("product__name")
@@ -907,6 +1142,8 @@ def dashboard_insights_view(request):
 @api_view(["GET"])
 @login_required_api
 def user_performance_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can access team performance."}, status=status.HTTP_403_FORBIDDEN)
     rows = (
         User.objects.values("id", "username", "first_name")
         .annotate(sales_count=Count("sales"), revenue=Sum("sales__total"))

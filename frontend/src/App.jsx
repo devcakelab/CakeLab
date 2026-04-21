@@ -3,6 +3,7 @@ import Toast from "./components/Toast";
 import { NAV_ITEMS } from "./constants/navigation";
 import { api } from "./lib/api";
 import { buildSkuFromName } from "./lib/posUtils";
+import AccountsView from "./views/AccountsView";
 import DashboardView from "./views/DashboardView";
 import InventoryView from "./views/InventoryView";
 import LoginView from "./views/LoginView";
@@ -47,6 +48,8 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [insights, setInsights] = useState(null);
   const [sales, setSales] = useState([]);
+  const [pendingOrders, setPendingOrders] = useState([]);
+  const [accounts, setAccounts] = useState([]);
   const [reportRows, setReportRows] = useState([]);
   const [reportPeriod, setReportPeriod] = useState("daily");
   const [reportStartDate, setReportStartDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -132,6 +135,15 @@ export default function App() {
     }
   }
 
+  async function loadPendingOrders() {
+    try {
+      const res = await api.get("/orders/pending");
+      setPendingOrders(res.data);
+    } catch {
+      setPendingOrders([]);
+    }
+  }
+
   async function loadReport(period = reportPeriod, startDate = reportStartDate, endDate = reportEndDate) {
     try {
       const query = new URLSearchParams({ period });
@@ -147,6 +159,15 @@ export default function App() {
     }
   }
 
+  async function loadAccounts() {
+    try {
+      const res = await api.get("/accounts");
+      setAccounts(res.data);
+    } catch {
+      setAccounts([]);
+    }
+  }
+
   async function loadSession() {
     try {
       const res = await api.get("/auth/me");
@@ -157,12 +178,32 @@ export default function App() {
   }
 
   async function loadPrivateData() {
-    await Promise.all([
-      loadStats(),
-      loadInsights(),
-      loadSales(),
-      loadReport(reportPeriod, reportStartDate, reportEndDate),
-    ]);
+    const allowedTabs = new Set(user?.allowed_tabs || []);
+    const tasks = [];
+    if (allowedTabs.has("dashboard")) {
+      tasks.push(loadStats(), loadInsights());
+    } else {
+      setStats(null);
+      setInsights(null);
+    }
+    if (allowedTabs.has("sales")) {
+      tasks.push(loadSales());
+      tasks.push(loadReport(reportPeriod, reportStartDate, reportEndDate));
+    } else {
+      setSales([]);
+      setReportRows([]);
+    }
+    if (allowedTabs.has("pos") && user?.role !== "guest") {
+      tasks.push(loadPendingOrders());
+    } else {
+      setPendingOrders([]);
+    }
+    if (allowedTabs.has("accounts")) {
+      tasks.push(loadAccounts());
+    } else {
+      setAccounts([]);
+    }
+    await Promise.all(tasks);
   }
 
   useEffect(() => {
@@ -185,6 +226,8 @@ export default function App() {
     setStats(null);
     setInsights(null);
     setSales([]);
+    setPendingOrders([]);
+    setAccounts([]);
     setReportRows([]);
     setReceipt(null);
     setSelectedSaleId(null);
@@ -288,9 +331,13 @@ export default function App() {
       setCart([]);
       setPosCustomerName("");
       setPosOrderType("walk_in");
-      showToast(`Checkout completed. Sale #${res.data.sale_id}`, "success");
+      if (res.data?.pending_order_id) {
+        showToast(`Order sent for approval. Pending #${res.data.pending_order_id}`, "success");
+      } else {
+        showToast(`Checkout completed. Sale #${res.data.sale_id}`, "success");
+        setActiveTab("sales");
+      }
       await Promise.all([loadProducts(), loadPrivateData()]);
-      setActiveTab("sales");
     } catch (err) {
       showToast(err.response?.data?.detail || "Checkout failed.", "error");
     } finally {
@@ -450,10 +497,67 @@ export default function App() {
     }
   }
 
+  async function approvePendingOrder(orderId) {
+    setBusy(true);
+    try {
+      await api.post(`/orders/${orderId}/approve`);
+      showToast("Pending order approved.", "success");
+      await Promise.all([loadPendingOrders(), loadSales(), loadReport(reportPeriod, reportStartDate, reportEndDate)]);
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Failed to approve order.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rejectPendingOrder(orderId) {
+    setBusy(true);
+    try {
+      await api.post(`/orders/${orderId}/reject`);
+      showToast("Pending order rejected.", "info");
+      await loadPendingOrders();
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Failed to reject order.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeAccountRole(userId, role) {
+    setBusy(true);
+    try {
+      const res = await api.put(`/accounts/${userId}/role`, { role });
+      showToast(res.data?.detail || "Role updated.", "success");
+      await Promise.all([loadAccounts(), loadSession()]);
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Failed to update role.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteAccount(userId, fullName) {
+    if (!window.confirm(`Delete account "${fullName}"? This action cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await api.delete(`/accounts/${userId}`);
+      showToast("Account deleted.", "success");
+      await Promise.all([loadAccounts(), loadSession()]);
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Failed to delete account.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const viewByTab = {
     dashboard: <DashboardView stats={stats} insights={insights} sales={sales} />,
     pos: (
       <PosView
+        userRole={user?.role}
+        pendingOrders={pendingOrders}
+        approvePendingOrder={approvePendingOrder}
+        rejectPendingOrder={rejectPendingOrder}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
         sectionFilter={sectionFilter}
@@ -519,6 +623,15 @@ export default function App() {
         loadReport={loadReport}
       />
     ),
+    accounts: (
+      <AccountsView
+        accounts={accounts}
+        currentUserId={user?.id}
+        onChangeRole={changeAccountRole}
+        onDeleteAccount={deleteAccount}
+        busy={busy}
+      />
+    ),
   };
 
   if (loading) return <main className="loading-screen">Loading CakeLab...</main>;
@@ -545,6 +658,10 @@ export default function App() {
     );
   }
 
+  const allowedTabs = user.allowed_tabs || ["dashboard", "pos", "inventory", "sales", "reports", "accounts"];
+  const visibleNavItems = NAV_ITEMS.filter((item) => allowedTabs.includes(item.id));
+  const safeActiveTab = allowedTabs.includes(activeTab) ? activeTab : (allowedTabs[0] || "pos");
+
   return (
     <>
       <Toast toast={toast} onClose={() => setToast(null)} />
@@ -555,12 +672,12 @@ export default function App() {
             <p>{user.full_name}</p>
           </div>
           <nav aria-label="Main navigation">
-            {NAV_ITEMS.map((item) => (
+            {visibleNavItems.map((item) => (
               <button
                 key={item.id}
-                className={`nav-btn ${activeTab === item.id ? "nav-btn-active" : ""}`}
+                className={`nav-btn ${safeActiveTab === item.id ? "nav-btn-active" : ""}`}
                 onClick={() => setActiveTab(item.id)}
-                aria-current={activeTab === item.id ? "page" : undefined}
+                aria-current={safeActiveTab === item.id ? "page" : undefined}
               >
                 <span className="nav-icon" aria-hidden="true">
                   {item.icon}
@@ -574,7 +691,7 @@ export default function App() {
           </button>
         </aside>
 
-        <main className="content">{viewByTab[activeTab] || viewByTab.dashboard}</main>
+        <main className="content">{viewByTab[safeActiveTab] || viewByTab.pos}</main>
       </div>
     </>
   );
