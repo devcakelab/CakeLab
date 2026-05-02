@@ -12,6 +12,11 @@ export default function SalesView({
   busy,
   receiptEmailStatus,
 }) {
+  const toAmount = (value) => {
+    const numeric = Number(value ?? 0);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+
   return (
     <section className="view">
       <header className="view-header">
@@ -52,15 +57,15 @@ export default function SalesView({
                         <td>
                           <div className="inline-actions">
                             <button className="btn-ghost" onClick={() => toggleReceipt(sale.id)}>
-                              Receipt
+                              Breakdown
                             </button>
                             <a
                               className="btn-link"
                               href={`${window.location.protocol}//${window.location.hostname}:8000/api/sales/${sale.id}/receipt.pdf`}
                               target="_blank"
-                              rel="noreferrer"
+                              rel="noopener noreferrer"
                             >
-                              PDF
+                              View PDF
                             </a>
                           </div>
                         </td>
@@ -70,7 +75,7 @@ export default function SalesView({
                           <td colSpan="5">
                             <div className={`receipt-expand ${hasReceipt ? "receipt-expand-open" : ""}`}>
                               <div className="receipt-expand-inner">
-                                <h3 className="receipt-title">Receipt</h3>
+                                <h3 className="receipt-title">Breakdown of the sale. 😁 </h3>
                                 {hasReceipt ? (
                                   <>
                                     <div className="receipt-items">
@@ -81,6 +86,35 @@ export default function SalesView({
                                         </p>
                                       ))}
                                     </div>
+                                    {(() => {
+                                      const discountAmount = toAmount(receipt.sale?.discount_amount);
+                                      const totalAmount = toAmount(receipt.sale?.total);
+                                      const subtotalAmount =
+                                        discountAmount > 0
+                                          ? totalAmount + discountAmount
+                                          : (receipt.items || []).reduce(
+                                              (sum, item) => sum + toAmount(item.line_total),
+                                              0
+                                            );
+                                      return (
+                                        <div className="receipt-summary">
+                                          <p>
+                                            <span>Subtotal</span>
+                                            <strong>{formatCurrency(subtotalAmount)}</strong>
+                                          </p>
+                                          {discountAmount > 0 ? (
+                                            <p className="receipt-summary-discount">
+                                              <span>Senior/PWD Discount (20%)</span>
+                                              <strong>-{formatCurrency(discountAmount)}</strong>
+                                            </p>
+                                          ) : null}
+                                          <p className="receipt-summary-total">
+                                            <span>Grand Total</span>
+                                            <strong>{formatCurrency(totalAmount)}</strong>
+                                          </p>
+                                        </div>
+                                      );
+                                    })()}
                                     <div className="receipt-email-row">
                                       <input
                                         type="email"

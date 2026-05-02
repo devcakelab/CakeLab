@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Toast from "./components/Toast";
 import { NAV_ITEMS } from "./constants/navigation";
+import { useHashTab } from "./hooks/useHashTab";
+import { usePendingOrdersPolling } from "./hooks/usePendingOrdersPolling";
 import { api } from "./lib/api";
 import { buildSkuFromName } from "./lib/posUtils";
 import AccountsView from "./views/AccountsView";
@@ -10,6 +12,8 @@ import LoginView from "./views/LoginView";
 import PosView from "./views/PosView";
 import ReportsView from "./views/ReportsView";
 import SalesView from "./views/SalesView";
+import IncidentReportsView from "./views/IncidentReportsView";
+import ClientPosView from "./views/ClientPosView";
 
 const EMPTY_REGISTER_FORM = { fullName: "", username: "", password: "", confirmPassword: "" };
 const EMPTY_RESET_FORM = { username: "", newPassword: "", confirmPassword: "" };
@@ -31,12 +35,20 @@ function apiErrorMessage(err, fallback) {
   return fallback;
 }
 
+function isStrongPassword(value) {
+  return /[A-Z]/.test(value) && /[a-z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
+}
+
+function hasRestrictedPasswordChars(value) {
+  return /[$'",]/.test(value);
+}
+
 export default function App() {
+  const { activeTab, navigateToTab } = useHashTab();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
-  const [activeTab, setActiveTab] = useState("dashboard");
   const [authMode, setAuthMode] = useState("login");
 
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
@@ -50,6 +62,7 @@ export default function App() {
   const [sales, setSales] = useState([]);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [incidentReports, setIncidentReports] = useState([]);
   const [reportRows, setReportRows] = useState([]);
   const [reportPeriod, setReportPeriod] = useState("daily");
   const [reportStartDate, setReportStartDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -61,6 +74,7 @@ export default function App() {
   const [cart, setCart] = useState([]);
   const [posCustomerName, setPosCustomerName] = useState("");
   const [posOrderType, setPosOrderType] = useState("walk_in");
+  const [posAmountReceived, setPosAmountReceived] = useState("");
 
   const [selectedSaleId, setSelectedSaleId] = useState(null);
   const [receipt, setReceipt] = useState(null);
@@ -168,6 +182,15 @@ export default function App() {
     }
   }
 
+  async function loadIncidentReports() {
+    try {
+      const res = await api.get("/incident-reports");
+      setIncidentReports(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setIncidentReports([]);
+    }
+  }
+
   async function loadSession() {
     try {
       const res = await api.get("/auth/me");
@@ -203,6 +226,11 @@ export default function App() {
     } else {
       setAccounts([]);
     }
+    if (allowedTabs.has("incident_reports")) {
+      tasks.push(loadIncidentReports());
+    } else {
+      setIncidentReports([]);
+    }
     await Promise.all(tasks);
   }
 
@@ -228,10 +256,13 @@ export default function App() {
     setSales([]);
     setPendingOrders([]);
     setAccounts([]);
+    setIncidentReports([]);
     setReportRows([]);
     setReceipt(null);
     setSelectedSaleId(null);
   }, [user]);
+
+  usePendingOrdersPolling({ user, activeTab, setPendingOrders });
 
   async function login(event) {
     event.preventDefault();
@@ -250,6 +281,15 @@ export default function App() {
   async function register(event) {
     event.preventDefault();
     if (registerForm.password.length < 6) return showToast("Password must be at least 6 characters.", "error");
+    if (hasRestrictedPasswordChars(registerForm.password)) {
+      return showToast('Password cannot contain $, ", \', or comma (,).', "error");
+    }
+    if (!isStrongPassword(registerForm.password)) {
+      return showToast(
+        "Password must include at least 1 uppercase, 1 lowercase, 1 number, and 1 symbol.",
+        "error"
+      );
+    }
     if (registerForm.password !== registerForm.confirmPassword) return showToast("Passwords do not match.", "error");
 
     setBusy(true);
@@ -296,6 +336,7 @@ export default function App() {
     await api.post("/auth/logout");
     setUser(null);
     setCart([]);
+    setPosAmountReceived("");
     showToast("Logged out.", "info");
   }
 
@@ -315,10 +356,67 @@ export default function App() {
         .filter((item) => item.quantity > 0)
     );
   const removeCartItem = (productId) => setCart((current) => current.filter((item) => item.id !== productId));
+  const clearPosCart = () => {
+    setCart([]);
+    setPosAmountReceived("");
+  };
 
-  async function checkout() {
-    if (!user) return showToast("Login required for checkout.", "error");
-    if (cart.length === 0) return showToast("Cart is empty.", "error");
+  async function checkout({ seniorDiscountApplied = false } = {}) {
+    if (!user) {
+      showToast("Login required for checkout.", "error");
+      return false;
+    }
+    if (cart.length === 0) {
+      showToast("Cart is empty.", "error");
+      return false;
+    }
+    const amountReceivedNumber = Number(posAmountReceived);
+    const hasAmountReceived =
+      posAmountReceived.trim() !== "" && Number.isFinite(amountReceivedNumber) && amountReceivedNumber >= 0;
+    const payableTotal = seniorDiscountApplied ? Number((cartTotal * 0.8).toFixed(2)) : cartTotal;
+    if (!hasAmountReceived) {
+      showToast("Enter amount received.", "error");
+      return false;
+    }
+    if (amountReceivedNumber < payableTotal) {
+      showToast("Amount received is not enough.", "error");
+      return false;
+    }
+
+    setBusy(true);
+    try {
+      const payload = {
+        customer_name: posCustomerName.trim(),
+        order_type: posOrderType,
+        senior_discount_applied: seniorDiscountApplied,
+        items: cart.map((item) => ({ product_id: item.id, quantity: item.quantity })),
+      };
+      const res = await api.post("/checkout", payload);
+      setCart([]);
+      setPosCustomerName("");
+      setPosOrderType("walk_in");
+      setPosAmountReceived("");
+      if (res.data?.pending_order_id) {
+        showToast(`Order sent for approval. Pending #${res.data.pending_order_id}`, "success");
+      } else {
+        showToast(`Checkout completed. Sale #${res.data.sale_id}`, "success");
+        navigateToTab("sales");
+      }
+      await Promise.all([loadProducts(), loadPrivateData()]);
+      return true;
+    } catch (err) {
+      showToast(err.response?.data?.detail || "Checkout failed.", "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitClientOrder() {
+    if (cart.length === 0) {
+      showToast("Cart is empty.", "error");
+      return { ok: false, pendingOrderId: null };
+    }
 
     setBusy(true);
     try {
@@ -327,19 +425,20 @@ export default function App() {
         order_type: posOrderType,
         items: cart.map((item) => ({ product_id: item.id, quantity: item.quantity })),
       };
-      const res = await api.post("/checkout", payload);
+      const res = await api.post("/orders/submit", payload);
       setCart([]);
       setPosCustomerName("");
       setPosOrderType("walk_in");
+      setPosAmountReceived("");
       if (res.data?.pending_order_id) {
-        showToast(`Order sent for approval. Pending #${res.data.pending_order_id}`, "success");
+        showToast(`Order submitted. Pending #${res.data.pending_order_id}`, "success");
       } else {
-        showToast(`Checkout completed. Sale #${res.data.sale_id}`, "success");
-        setActiveTab("sales");
+        showToast(res.data?.detail || "Order submitted for approval.", "success");
       }
-      await Promise.all([loadProducts(), loadPrivateData()]);
+      return { ok: true, pendingOrderId: res.data?.pending_order_id || null, status: res.data?.status || null };
     } catch (err) {
-      showToast(err.response?.data?.detail || "Checkout failed.", "error");
+      showToast(err.response?.data?.detail || "Failed to submit order.", "error");
+      return { ok: false, pendingOrderId: null };
     } finally {
       setBusy(false);
     }
@@ -497,10 +596,10 @@ export default function App() {
     }
   }
 
-  async function approvePendingOrder(orderId) {
+  async function approvePendingOrder(orderId, { seniorDiscountApplied = false } = {}) {
     setBusy(true);
     try {
-      await api.post(`/orders/${orderId}/approve`);
+      await api.post(`/orders/${orderId}/approve`, { senior_discount_applied: seniorDiscountApplied });
       showToast("Pending order approved.", "success");
       await Promise.all([loadPendingOrders(), loadSales(), loadReport(reportPeriod, reportStartDate, reportEndDate)]);
     } catch (err) {
@@ -550,6 +649,27 @@ export default function App() {
     }
   }
 
+  async function createIncidentReport(payload) {
+    setBusy(true);
+    try {
+      const formData = new FormData();
+      formData.set("sale_id", String(payload.sale_id));
+      formData.set("details", payload.details || "");
+      if (payload.attachment) {
+        formData.set("attachment", payload.attachment);
+      }
+      const res = await api.post("/incident-reports", formData);
+      setIncidentReports((current) => [res.data, ...current]);
+      showToast("Incident report saved.", "success");
+      return true;
+    } catch (err) {
+      showToast(apiErrorMessage(err, "Failed to save incident report."), "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const viewByTab = {
     dashboard: <DashboardView stats={stats} insights={insights} sales={sales} />,
     pos: (
@@ -569,12 +689,36 @@ export default function App() {
         adjustCart={adjustCart}
         removeCartItem={removeCartItem}
         cartTotal={cartTotal}
-        setCart={setCart}
+        clearCart={clearPosCart}
         customerName={posCustomerName}
         setCustomerName={setPosCustomerName}
         orderType={posOrderType}
         setOrderType={setPosOrderType}
+        amountReceived={posAmountReceived}
+        setAmountReceived={setPosAmountReceived}
         checkout={checkout}
+        busy={busy}
+      />
+    ),
+    client_pos: (
+      <ClientPosView
+        searchTerm={searchTerm}
+        setSearchTerm={setSearchTerm}
+        sectionFilter={sectionFilter}
+        setSectionFilter={setSectionFilter}
+        sections={sections}
+        filteredProducts={filteredProducts}
+        addToCart={addToCart}
+        cart={cart}
+        adjustCart={adjustCart}
+        removeCartItem={removeCartItem}
+        cartTotal={cartTotal}
+        clearCart={clearPosCart}
+        customerName={posCustomerName}
+        setCustomerName={setPosCustomerName}
+        orderType={posOrderType}
+        setOrderType={setPosOrderType}
+        submitClientOrder={submitClientOrder}
         busy={busy}
       />
     ),
@@ -613,6 +757,7 @@ export default function App() {
     ),
     reports: (
       <ReportsView
+        userRole={user?.role}
         reportRows={reportRows}
         reportPeriod={reportPeriod}
         setReportPeriod={setReportPeriod}
@@ -621,6 +766,14 @@ export default function App() {
         reportEndDate={reportEndDate}
         setReportEndDate={setReportEndDate}
         loadReport={loadReport}
+      />
+    ),
+    incident_reports: (
+      <IncidentReportsView
+        sales={sales}
+        incidentReports={incidentReports}
+        createIncidentReport={createIncidentReport}
+        busy={busy}
       />
     ),
     accounts: (
@@ -636,7 +789,9 @@ export default function App() {
 
   if (loading) return <main className="loading-screen">Loading CakeLab...</main>;
 
-  if (!user) {
+  const isPublicClientPosRoute = !user && activeTab === "client_pos";
+
+  if (!user && !isPublicClientPosRoute) {
     return (
       <>
         <Toast toast={toast} onClose={() => setToast(null)} />
@@ -658,9 +813,59 @@ export default function App() {
     );
   }
 
-  const allowedTabs = user.allowed_tabs || ["dashboard", "pos", "inventory", "sales", "reports", "accounts"];
-  const visibleNavItems = NAV_ITEMS.filter((item) => allowedTabs.includes(item.id));
-  const safeActiveTab = allowedTabs.includes(activeTab) ? activeTab : (allowedTabs[0] || "pos");
+  if (!user && isPublicClientPosRoute) {
+    return (
+      <>
+        <Toast toast={toast} onClose={() => setToast(null)} />
+        <main className="content">
+          <ClientPosView
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            sectionFilter={sectionFilter}
+            setSectionFilter={setSectionFilter}
+            sections={sections}
+            filteredProducts={filteredProducts}
+            addToCart={addToCart}
+            cart={cart}
+            adjustCart={adjustCart}
+            removeCartItem={removeCartItem}
+            cartTotal={cartTotal}
+            clearCart={clearPosCart}
+            customerName={posCustomerName}
+            setCustomerName={setPosCustomerName}
+            orderType={posOrderType}
+            setOrderType={setPosOrderType}
+            submitClientOrder={submitClientOrder}
+            busy={busy}
+          />
+        </main>
+      </>
+    );
+  }
+
+  const allowedTabs = user.allowed_tabs || [
+    "dashboard",
+    "pos",
+    "client_pos",
+    "inventory",
+    "sales",
+    "reports",
+    "incident_reports",
+    "accounts",
+  ];
+  // Keep POS and Client POS always reachable when clicked in the sidebar.
+  const effectiveAllowedTabs = Array.from(new Set([...allowedTabs, "pos", "client_pos"]));
+  const visibleNavItems = NAV_ITEMS.filter((item) => item.id !== "client_pos" && effectiveAllowedTabs.includes(item.id));
+  const safeActiveTab = effectiveAllowedTabs.includes(activeTab) ? activeTab : (effectiveAllowedTabs[0] || "pos");
+
+  if (safeActiveTab === "client_pos") {
+    return (
+      <>
+        <Toast toast={toast} onClose={() => setToast(null)} />
+        <main className="content">{viewByTab.client_pos}</main>
+      </>
+    );
+  }
 
   return (
     <>
@@ -676,7 +881,7 @@ export default function App() {
               <button
                 key={item.id}
                 className={`nav-btn ${safeActiveTab === item.id ? "nav-btn-active" : ""}`}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => navigateToTab(item.id)}
                 aria-current={safeActiveTab === item.id ? "page" : undefined}
               >
                 <span className="nav-icon" aria-hidden="true">

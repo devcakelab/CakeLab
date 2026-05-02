@@ -24,6 +24,7 @@ class Section(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "core_category"
         ordering = ["name"]
 
     def __str__(self) -> str:
@@ -71,6 +72,8 @@ class Sale(models.Model):
     )
     customer_name = models.CharField(max_length=200, default="Walk-in Customer")
     order_type = models.CharField(max_length=20, choices=ORDER_TYPE_CHOICES, default=ORDER_TYPE_WALK_IN)
+    senior_discount_applied = models.BooleanField(default=False)
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=12, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -131,3 +134,21 @@ class PendingOrderItem(models.Model):
     pending_order = models.ForeignKey(PendingOrder, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="pending_order_items")
     quantity = models.PositiveIntegerField()
+
+
+class IncidentReport(models.Model):
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="incident_reports")
+    details = models.TextField()
+    attachment = models.ImageField(upload_to="incident_reports/", null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="incident_reports",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]

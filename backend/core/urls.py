@@ -9,6 +9,7 @@ from .views import (
     checkout_view,
     dashboard_insights_view,
     dashboard_stats_view,
+    incident_reports_view,
     login_view,
     low_stock_products_view,
     logout_view,
@@ -26,7 +27,9 @@ from .views import (
     sales_view,
     section_detail_view,
     sections_view,
+    submit_order_view,
     pending_orders_view,
+    pending_order_status_view,
     user_performance_view,
 )
 
@@ -46,8 +49,10 @@ urlpatterns = [
     path("products/low-stock", low_stock_products_view),
     path("products/<int:product_id>", product_detail_view),
     path("checkout", checkout_view),
+    path("orders/submit", submit_order_view),
     path("sales", sales_view),
     path("orders/pending", pending_orders_view),
+    path("orders/<int:order_id>/status", pending_order_status_view),
     path("orders/<int:order_id>/approve", approve_pending_order_view),
     path("orders/<int:order_id>/reject", reject_pending_order_view),
     path("sales/<int:sale_id>", sale_receipt_view),
@@ -57,5 +62,6 @@ urlpatterns = [
     path("dashboard/insights", dashboard_insights_view),
     path("reports", sales_report_view),
     path("reports/details", sales_report_detail_view),
+    path("incident-reports", incident_reports_view),
     path("users/performance", user_performance_view),
 ]

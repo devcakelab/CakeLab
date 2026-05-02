@@ -29,10 +29,10 @@ export default function LoginView({
           {authMode === "login" ? (
             <form onSubmit={onLogin} className="login-form" aria-label="Login form" autoComplete="off">
               <label className="login-field">
-                <span>Email or Username</span>
+                <span>Username</span>
                 <input
                   className="login-input"
-                  placeholder="you@example.com"
+                  placeholder="Enter Your Username Here"
                   value={loginForm.username}
                   onChange={(e) => setLoginForm((s) => ({ ...s, username: e.target.value }))}
                   autoComplete="off"

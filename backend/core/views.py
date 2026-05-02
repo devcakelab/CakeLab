@@ -3,8 +3,6 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from functools import wraps
 from io import BytesIO
-import hashlib
-import hmac
 import os
 from pathlib import Path
 import re
@@ -22,12 +20,14 @@ from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, parser_classes
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
-from .models import PendingOrder, PendingOrderItem, Product, Sale, SaleItem, Section, UserProfile
+from .models import IncidentReport, PendingOrder, PendingOrderItem, Product, Sale, SaleItem, Section, UserProfile
 from .serializers import (
     CheckoutSerializer,
+    IncidentReportSerializer,
     PendingOrderSerializer,
     ProductSerializer,
     RegisterSerializer,
@@ -87,6 +87,7 @@ def api_root_view(request):
                 "/api/dashboard/insights",
                 "/api/reports?period=daily|weekly|monthly|quarterly|yearly",
                 "/api/reports/details?period=weekly&period_label=2026-W15",
+                "/api/incident-reports",
                 "/api/users/performance",
                 "/api/accounts",
                 "/api/accounts/<id>/role",
@@ -136,55 +137,11 @@ def _ensure_profile(user: User) -> UserProfile:
     return profile
 
 
-def _authorized_by(request: HttpRequest, sale: Sale) -> str:
-    actor = _session_user(request)
-    if actor:
-        return actor.first_name or actor.username
-    if sale.user:
-        return sale.user.first_name or sale.user.username
-    return "System"
-
-
-def _build_receipt_auth_code(sale: Sale, authorized_by: str) -> str:
-    payload = "|".join(
-        [
-            str(sale.id),
-            str(sale.created_at),
-            f"{float(sale.total):.2f}",
-            str(sale.customer_name or ""),
-            str(sale.user.username if sale.user else "unknown"),
-            authorized_by,
-        ]
-    )
-    digest = hmac.new(
-        settings.SECRET_KEY.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return digest[:20].upper()
-
-
-def _signature_image_path() -> str | None:
-    direct = os.environ.get("SIGNATURE_IMAGE", "").strip()
-    if direct and os.path.isfile(direct):
-        return direct
-    fallbacks = [
-        os.path.join(settings.BASE_DIR, "assets", "signature.png"),
-        os.path.join(settings.BASE_DIR.parent, "sig.jpg"),
-        os.path.join(settings.BASE_DIR.parent, "sig.jpeg"),
-        os.path.join(settings.BASE_DIR.parent, "sig.png"),
-    ]
-    for fallback in fallbacks:
-        if os.path.isfile(fallback):
-            return fallback
-    return None
-
-
 def _is_valid_email(value: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value or ""))
 
 
-def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
+def _build_receipt_pdf_bytes(sale: Sale) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
     from reportlab.pdfgen import canvas
@@ -195,7 +152,6 @@ def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
     y = height - 54
     left = 50
     right = width - 50
-    auth_code = _build_receipt_auth_code(sale, authorized_by)
     cashier_name = sale.user.first_name if sale.user and sale.user.first_name else (sale.user.username if sale.user else "Unknown")
 
     pdf.setTitle(f"Receipt {sale.id}")
@@ -236,7 +192,7 @@ def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
         pdf.drawString(col_product_x, pos_y - 10, "Product")
         pdf.drawRightString(col_qty_right, pos_y - 10, "Qty")
         pdf.drawRightString(col_unit_right, pos_y - 10, "Unit Price")
-        pdf.drawRightString(col_line_right, pos_y - 10, "Line Total")
+        pdf.drawRightString(col_line_right, pos_y - 10, "Amount Total")
         pdf.setFillColor(colors.black)
         return pos_y - 24
 
@@ -271,58 +227,37 @@ def _build_receipt_pdf_bytes(sale: Sale, authorized_by: str) -> bytes:
     pdf.line(left, y, right, y)
     y -= 26
 
+    discount_amount = sale.discount_amount or Decimal("0.00")
+    subtotal_amount = (sale.total or Decimal("0.00")) + discount_amount
     total_box_width = 220
     total_box_height = 30
     total_box_x = right - total_box_width
+    summary_gap = 16
+    summary_y = y + 4
+
+    pdf.setFillColor(colors.HexColor("#3A2B5E"))
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(total_box_x, summary_y, "Subtotal")
+    pdf.drawRightString(right - 12, summary_y, f"PHP {to_money(subtotal_amount):.2f}")
+    summary_y -= summary_gap
+    if discount_amount > Decimal("0.00"):
+        pdf.drawString(total_box_x, summary_y, "Senior Discount (20%)")
+        pdf.drawRightString(right - 12, summary_y, f"-PHP {to_money(discount_amount):.2f}")
+        summary_y -= summary_gap
+
+    total_box_top = summary_y - 4
+    total_box_bottom = total_box_top - total_box_height
     pdf.setFillColor(colors.HexColor("#2B1F47"))
-    pdf.roundRect(total_box_x, y - 8, total_box_width, total_box_height, 6, stroke=0, fill=1)
+    pdf.roundRect(total_box_x, total_box_bottom, total_box_width, total_box_height, 6, stroke=0, fill=1)
     pdf.setFillColor(colors.white)
     pdf.setFont("Helvetica-Bold", 13)
-    pdf.drawString(total_box_x + 12, y + 5, "Grand Total")
-    pdf.drawRightString(right - 12, y + 5, f"PHP {to_money(sale.total):.2f}")
-    y -= 34
+    pdf.drawString(total_box_x + 12, total_box_bottom + 10, "Grand Total")
+    pdf.drawRightString(right - 12, total_box_bottom + 10, f"PHP {to_money(sale.total):.2f}")
+    y = total_box_bottom - 12
 
     pdf.setFillColor(colors.HexColor("#4B5563"))
     pdf.setFont("Helvetica-Oblique", 9)
     pdf.drawString(left, y, "Thank you for your purchase.")
-    y -= 22
-
-    pdf.setFillColor(colors.HexColor("#3A2B5E"))
-    pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(left, y, "E-Signature Authorization")
-    y -= 16
-    pdf.setFillColor(colors.black)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(left, y, f"Authorized by: {authorized_by}")
-    y -= 18
-
-    signature_path = _signature_image_path()
-    sig_img_w, sig_img_h = 150.0, 36.0
-    if signature_path:
-        label_y = y
-        pdf.drawString(left, label_y, "E-signature:")
-        # Image lower-left: place entire graphic below the label (PDF y increases upward).
-        img_bottom = label_y - 12 - sig_img_h
-        pdf.drawImage(
-            signature_path,
-            left,
-            img_bottom,
-            width=sig_img_w,
-            height=sig_img_h,
-            preserveAspectRatio=True,
-            mask="auto",
-        )
-        y = img_bottom - 14
-    else:
-        pdf.drawString(left, y, f"E-signature: /s/ {authorized_by}")
-        y -= 18
-
-    signed_at = timezone.localtime().strftime("%Y-%m-%d %H:%M:%S")
-    pdf.drawString(left, y, f"Signed at: {signed_at}")
-    y -= 14
-    pdf.setFont("Helvetica-Bold", 9)
-    pdf.setFillColor(colors.HexColor("#4B5563"))
-    pdf.drawString(left, y, f"Authorization code: {auth_code}")
 
     pdf.showPage()
     pdf.save()
@@ -633,9 +568,22 @@ def product_detail_view(request, product_id: int):
     return Response(serializer.data)
 
 
-def _create_sale(user: User | None, customer_name: str, order_type: str, items: list[dict]) -> Sale:
-    sale = Sale.objects.create(user=user, customer_name=customer_name, order_type=order_type, total=Decimal("0.00"))
-    total = Decimal("0.00")
+def _create_sale(
+    user: User | None,
+    customer_name: str,
+    order_type: str,
+    items: list[dict],
+    senior_discount_applied: bool = False,
+) -> Sale:
+    sale = Sale.objects.create(
+        user=user,
+        customer_name=customer_name,
+        order_type=order_type,
+        total=Decimal("0.00"),
+        senior_discount_applied=False,
+        discount_amount=Decimal("0.00"),
+    )
+    subtotal = Decimal("0.00")
     for item in items:
         try:
             product = Product.objects.select_for_update().get(id=item["product_id"])
@@ -646,7 +594,7 @@ def _create_sale(user: User | None, customer_name: str, order_type: str, items: 
             raise ValueError(f"Insufficient stock for {product.sku}. Available: {product.stock}")
         unit_price = product.price
         line_total = unit_price * qty
-        total += line_total
+        subtotal += line_total
         SaleItem.objects.create(
             sale=sale,
             product=product,
@@ -656,8 +604,11 @@ def _create_sale(user: User | None, customer_name: str, order_type: str, items: 
         )
         product.stock -= qty
         product.save(update_fields=["stock"])
-    sale.total = total
-    sale.save(update_fields=["total"])
+    discount_amount = (subtotal * Decimal("0.20")).quantize(Decimal("0.01")) if senior_discount_applied else Decimal("0.00")
+    sale.total = subtotal - discount_amount
+    sale.senior_discount_applied = bool(senior_discount_applied)
+    sale.discount_amount = discount_amount
+    sale.save(update_fields=["total", "senior_discount_applied", "discount_amount"])
     return sale
 
 
@@ -671,6 +622,7 @@ def checkout_view(request):
     items = payload["items"]
     customer_name = payload.get("customer_name", "").strip() or "Walk-in Customer"
     order_type = str(payload.get("order_type", "walk_in")).strip() or "walk_in"
+    senior_discount_applied = bool(payload.get("senior_discount_applied", False))
     user = _session_user(request)
     role = _user_role(user)
     if not items:
@@ -708,11 +660,66 @@ def checkout_view(request):
 
     try:
         with transaction.atomic():
-            sale = _create_sale(user=user, customer_name=customer_name, order_type=order_type, items=items)
+            sale = _create_sale(
+                user=user,
+                customer_name=customer_name,
+                order_type=order_type,
+                items=items,
+                senior_discount_applied=senior_discount_applied,
+            )
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    return Response({"sale_id": sale.id, "total": to_money(sale.total)}, status=status.HTTP_201_CREATED)
+    return Response(
+        {
+            "sale_id": sale.id,
+            "total": to_money(sale.total),
+            "senior_discount_applied": sale.senior_discount_applied,
+            "discount_amount": to_money(sale.discount_amount),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@csrf_exempt
+@api_view(["POST"])
+def submit_order_view(request):
+    serializer = CheckoutSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    payload = serializer.validated_data
+    items = payload["items"]
+    customer_name = payload.get("customer_name", "").strip() or "Walk-in Customer"
+    order_type = str(payload.get("order_type", "walk_in")).strip() or "walk_in"
+    user = _session_user(request)
+    if not items:
+        return Response({"detail": "Cart is empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        pending_order = PendingOrder.objects.create(
+            created_by=user,
+            customer_name=customer_name,
+            order_type=order_type,
+            status=PendingOrder.STATUS_PENDING,
+        )
+        for item in items:
+            try:
+                product = Product.objects.get(id=item["product_id"])
+            except Product.DoesNotExist:
+                return Response({"detail": "Product not found in checkout."}, status=status.HTTP_400_BAD_REQUEST)
+            PendingOrderItem.objects.create(
+                pending_order=pending_order,
+                product=product,
+                quantity=int(item["quantity"]),
+            )
+
+    return Response(
+        {
+            "detail": "Order submitted for cashier/admin approval.",
+            "pending_order_id": pending_order.id,
+            "status": pending_order.status,
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["GET"])
@@ -737,6 +744,19 @@ def pending_orders_view(request):
     return Response(PendingOrderSerializer(queryset, many=True).data)
 
 
+@api_view(["GET"])
+def pending_order_status_view(request, order_id: int):
+    try:
+        pending_order = (
+            PendingOrder.objects.select_related("created_by", "approved_by", "approved_sale")
+            .prefetch_related("items__product")
+            .get(id=order_id)
+        )
+    except PendingOrder.DoesNotExist:
+        return Response({"detail": "Pending order not found."}, status=status.HTTP_404_NOT_FOUND)
+    return Response(PendingOrderSerializer(pending_order).data)
+
+
 @csrf_exempt
 @api_view(["POST"])
 @login_required_api
@@ -753,6 +773,15 @@ def approve_pending_order_view(request, order_id: int):
         return Response({"detail": "This order is already processed."}, status=status.HTTP_400_BAD_REQUEST)
 
     items = [{"product_id": item.product_id, "quantity": item.quantity} for item in pending_order.items.all()]
+    raw_discount = request.data.get("senior_discount_applied", False)
+    if isinstance(raw_discount, bool):
+        senior_discount_applied = raw_discount
+    elif isinstance(raw_discount, (int, float)):
+        senior_discount_applied = bool(raw_discount)
+    elif isinstance(raw_discount, str):
+        senior_discount_applied = raw_discount.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        senior_discount_applied = False
     try:
         with transaction.atomic():
             sale = _create_sale(
@@ -760,6 +789,7 @@ def approve_pending_order_view(request, order_id: int):
                 customer_name=pending_order.customer_name,
                 order_type=pending_order.order_type,
                 items=items,
+                senior_discount_applied=senior_discount_applied,
             )
             pending_order.status = PendingOrder.STATUS_APPROVED
             pending_order.approved_by = actor
@@ -769,7 +799,15 @@ def approve_pending_order_view(request, order_id: int):
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    return Response({"detail": "Order approved.", "sale_id": sale.id})
+    return Response(
+        {
+            "detail": "Order approved.",
+            "sale_id": sale.id,
+            "total": to_money(sale.total),
+            "senior_discount_applied": sale.senior_discount_applied,
+            "discount_amount": to_money(sale.discount_amount),
+        }
+    )
 
 
 @csrf_exempt
@@ -832,9 +870,25 @@ def low_stock_products_view(request):
     return Response(ProductSerializer(queryset, many=True).data)
 
 
-@api_view(["GET"])
+@csrf_exempt
+@api_view(["GET", "DELETE"])
 @login_required_api
 def sale_receipt_view(request, sale_id: int):
+    if request.method == "DELETE":
+        if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+            return Response({"detail": "Only admins can delete sales."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            with transaction.atomic():
+                sale = Sale.objects.select_for_update().prefetch_related("items__product").get(id=sale_id)
+                for item in sale.items.all():
+                    product = item.product
+                    product.stock = int(product.stock) + int(item.quantity)
+                    product.save(update_fields=["stock"])
+                sale.delete()
+        except Sale.DoesNotExist:
+            return Response({"detail": "Sale not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"detail": "Sale deleted successfully."})
+
     try:
         sale = Sale.objects.select_related("user").prefetch_related("items__product").get(id=sale_id)
     except Sale.DoesNotExist:
@@ -852,14 +906,13 @@ def sale_receipt_pdf_view(request, sale_id: int):
         return Response({"detail": "Sale not found."}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        authorized_by = _authorized_by(request, sale)
-        payload = _build_receipt_pdf_bytes(sale, authorized_by=authorized_by)
+        payload = _build_receipt_pdf_bytes(sale)
     except ModuleNotFoundError:
         return Response({"detail": "reportlab is not installed."}, status=status.HTTP_501_NOT_IMPLEMENTED)
     return HttpResponse(
         payload,
         content_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="receipt-{sale.id}.pdf"'},
+        headers={"Content-Disposition": "inline"},
     )
 
 
@@ -877,8 +930,7 @@ def sale_receipt_email_view(request, sale_id: int):
         return Response({"detail": "Sale not found."}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        authorized_by = _authorized_by(request, sale)
-        payload = _build_receipt_pdf_bytes(sale, authorized_by=authorized_by)
+        payload = _build_receipt_pdf_bytes(sale)
     except ModuleNotFoundError:
         return Response({"detail": "reportlab is not installed."}, status=status.HTTP_501_NOT_IMPLEMENTED)
 
@@ -1067,6 +1119,25 @@ def sales_report_detail_view(request):
         .order_by("-created_at")[:300]
     )
     return Response(SaleSerializer(queryset, many=True).data)
+
+
+@csrf_exempt
+@api_view(["GET", "POST"])
+@parser_classes([MultiPartParser, FormParser])
+@login_required_api
+def incident_reports_view(request):
+    if not _has_any_role(request, {UserProfile.ROLE_ADMIN}):
+        return Response({"detail": "Only admins can manage incident reports."}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == "GET":
+        queryset = IncidentReport.objects.select_related("sale", "created_by").all()[:300]
+        return Response(IncidentReportSerializer(queryset, many=True, context={"request": request}).data)
+
+    serializer = IncidentReportSerializer(data=request.data, context={"request": request})
+    serializer.is_valid(raise_exception=True)
+    actor = _session_user(request)
+    incident = serializer.save(created_by=actor)
+    return Response(IncidentReportSerializer(incident, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 def _dessert_icon(name: str) -> str:

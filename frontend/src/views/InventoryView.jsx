@@ -220,16 +220,21 @@ export default function InventoryView({
 
         {archiveOpen ? (
           <div className="inventory-categories-body">
-            <p className="muted archive-hint">Restore archived products to make them visible in POS and Inventory.</p>
+            <p className="muted archive-hint">Restore archived products or delete them permanently.</p>
             <div className="inventory-sectors-grid">
               <ProductTable
                 title={`Archived Made Products (${archivedMadeProducts.length})`}
                 rows={archivedMadeProducts}
                 emptyLabel="No archived made products."
                 renderActions={(product) => (
-                  <button className="btn-primary" onClick={() => restoreProduct(product.id, product.name)}>
-                    Restore
-                  </button>
+                  <div className="inline-actions">
+                    <button className="btn-primary" onClick={() => restoreProduct(product.id, product.name)}>
+                      Restore
+                    </button>
+                    <button className="btn-danger" onClick={() => deleteProduct(product.id, product.name)}>
+                      Delete
+                    </button>
+                  </div>
                 )}
               />
               <ProductTable
@@ -237,9 +242,14 @@ export default function InventoryView({
                 rows={archivedIngredientProducts}
                 emptyLabel="No archived ingredients."
                 renderActions={(product) => (
-                  <button className="btn-primary" onClick={() => restoreProduct(product.id, product.name)}>
-                    Restore
-                  </button>
+                  <div className="inline-actions">
+                    <button className="btn-primary" onClick={() => restoreProduct(product.id, product.name)}>
+                      Restore
+                    </button>
+                    <button className="btn-danger" onClick={() => deleteProduct(product.id, product.name)}>
+                      Delete
+                    </button>
+                  </div>
                 )}
               />
             </div>

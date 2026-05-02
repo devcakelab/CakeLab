@@ -37,6 +37,7 @@ function formatWeeklyLabel(rawLabel) {
 }
 
 export default function ReportsView({
+  userRole,
   reportRows,
   reportPeriod,
   setReportPeriod,
@@ -51,6 +52,7 @@ export default function ReportsView({
   const [periodSalesByLabel, setPeriodSalesByLabel] = useState({});
   const [loadingPeriodLabel, setLoadingPeriodLabel] = useState(null);
   const [detailErrorByLabel, setDetailErrorByLabel] = useState({});
+  const [deletingSaleId, setDeletingSaleId] = useState(null);
   const rowsAscending = [...reportRows].reverse();
   const hasRows = rowsAscending.length > 0;
   const maxRevenue = Math.max(...rowsAscending.map((row) => Number(row.revenue || 0)), 1);
@@ -113,6 +115,27 @@ export default function ReportsView({
       }));
     } finally {
       setLoadingPeriodLabel((current) => (current === periodLabel ? null : current));
+    }
+  }
+
+  async function deleteSaleRecord(saleId, periodLabel) {
+    if (userRole !== "admin") return;
+    if (!window.confirm(`Delete sale #${saleId}? This will permanently remove it from reports and restore item stock.`)) return;
+
+    setDeletingSaleId(saleId);
+    setDetailErrorByLabel((current) => ({ ...current, [periodLabel]: null }));
+    try {
+      await api.delete(`/sales/${saleId}`);
+      setPeriodSalesByLabel((current) => ({
+        ...current,
+        [periodLabel]: (current[periodLabel] || []).filter((sale) => sale.id !== saleId),
+      }));
+      await loadReport(reportPeriod, reportStartDate, reportEndDate);
+    } catch (err) {
+      const message = err?.response?.data?.detail || "Unable to delete this sale. Please try again.";
+      setDetailErrorByLabel((current) => ({ ...current, [periodLabel]: message }));
+    } finally {
+      setDeletingSaleId(null);
     }
   }
 
@@ -252,40 +275,6 @@ export default function ReportsView({
             ) : null}
           </div>
 
-          {reportPeriod === "daily" ? (
-            <div className="reports-quick-actions">
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => {
-                  const today = toLocalIsoDate(new Date());
-                  setAutoExpandedRange(false);
-                  setReportStartDate(today);
-                  setReportEndDate(today);
-                  loadReport("daily", today, today);
-                }}
-              >
-                Today
-              </button>
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => {
-                  const today = new Date();
-                  const end = toLocalIsoDate(today);
-                  const startDate = new Date(today);
-                  startDate.setDate(startDate.getDate() - 6);
-                  const start = toLocalIsoDate(startDate);
-                  setAutoExpandedRange(false);
-                  setReportStartDate(start);
-                  setReportEndDate(end);
-                  loadReport("daily", start, end);
-                }}
-              >
-                Last 7 days
-              </button>
-            </div>
-          ) : null}
         </section>
 
         <section>
@@ -397,6 +386,7 @@ export default function ReportsView({
                                         <th>Cashier</th>
                                         <th>Items</th>
                                         <th>Total</th>
+                                        {userRole === "admin" ? <th>Action</th> : null}
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -408,6 +398,18 @@ export default function ReportsView({
                                           <td>{sale.cashier_name || "-"}</td>
                                           <td>{saleItemSummary(sale.items)}</td>
                                           <td>{formatCurrency(sale.total)}</td>
+                                          {userRole === "admin" ? (
+                                            <td>
+                                              <button
+                                                type="button"
+                                                className="btn-danger"
+                                                onClick={() => deleteSaleRecord(sale.id, row.period_label)}
+                                                disabled={deletingSaleId === sale.id}
+                                              >
+                                                {deletingSaleId === sale.id ? "Deleting..." : "Delete"}
+                                              </button>
+                                            </td>
+                                          ) : null}
                                         </tr>
                                       ))}
                                     </tbody>

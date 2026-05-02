@@ -1,9 +1,10 @@
 from decimal import Decimal
+import re
 
 from django.contrib.auth.models import User
 from rest_framework import serializers
 
-from .models import PendingOrder, PendingOrderItem, Product, Sale, SaleItem, Section, UserProfile
+from .models import IncidentReport, PendingOrder, PendingOrderItem, Product, Sale, SaleItem, Section, UserProfile
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -28,7 +29,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     def get_allowed_tabs(self, obj: User) -> list[str]:
         role = self.get_role(obj)
         if role == UserProfile.ROLE_ADMIN:
-            return ["dashboard", "pos", "inventory", "sales", "reports", "accounts"]
+            return ["dashboard", "pos", "inventory", "sales", "reports", "incident_reports", "accounts"]
         if role == UserProfile.ROLE_CASHIER:
             return ["pos", "sales"]
         return ["pos"]
@@ -43,6 +44,19 @@ class RegisterSerializer(serializers.Serializer):
         required=False,
         default=UserProfile.ROLE_CASHIER,
     )
+
+    def validate_password(self, value: str) -> str:
+        if any(char in value for char in ['$', '"', "'", ","]):
+            raise serializers.ValidationError("Password cannot contain $, \", ', or comma (,).")
+        has_upper = bool(re.search(r"[A-Z]", value))
+        has_lower = bool(re.search(r"[a-z]", value))
+        has_number = bool(re.search(r"\d", value))
+        has_symbol = bool(re.search(r"[^A-Za-z0-9]", value))
+        if not (has_upper and has_lower and has_number and has_symbol):
+            raise serializers.ValidationError(
+                "Password must include at least 1 uppercase letter, 1 lowercase letter, 1 number, and 1 symbol."
+            )
+        return value
 
 
 class SectionSerializer(serializers.ModelSerializer):
@@ -81,6 +95,7 @@ class CheckoutItemSerializer(serializers.Serializer):
 class CheckoutSerializer(serializers.Serializer):
     customer_name = serializers.CharField(required=False, allow_blank=True, max_length=200)
     order_type = serializers.ChoiceField(choices=["walk_in", "online"], required=False, default="walk_in")
+    senior_discount_applied = serializers.BooleanField(required=False, default=False)
     items = CheckoutItemSerializer(many=True)
 
 
@@ -103,6 +118,8 @@ class SaleSerializer(serializers.ModelSerializer):
             "id",
             "created_at",
             "customer_name",
+            "senior_discount_applied",
+            "discount_amount",
             "total",
             "cashier_name",
             "items",
@@ -112,6 +129,66 @@ class SaleSerializer(serializers.ModelSerializer):
         if not obj.user:
             return "Unknown"
         return obj.user.first_name or obj.user.username
+
+
+class IncidentReportSerializer(serializers.ModelSerializer):
+    sale_id = serializers.IntegerField(write_only=True)
+    attachment = serializers.FileField(required=False, allow_null=True)
+    sale_number = serializers.IntegerField(source="sale.id", read_only=True)
+    sale_customer = serializers.CharField(source="sale.customer_name", read_only=True)
+    sale_total = serializers.DecimalField(source="sale.total", max_digits=12, decimal_places=2, read_only=True)
+    sale_created_at = serializers.DateTimeField(source="sale.created_at", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = IncidentReport
+        fields = [
+            "id",
+            "sale_id",
+            "sale_number",
+            "sale_customer",
+            "sale_total",
+            "sale_created_at",
+            "details",
+            "attachment",
+            "attachment_url",
+            "created_by_name",
+            "created_at",
+            "updated_at",
+        ]
+        extra_kwargs = {
+            "attachment": {"required": False, "allow_null": True},
+        }
+
+    def get_created_by_name(self, obj: IncidentReport) -> str:
+        if not obj.created_by:
+            return "Unknown"
+        return obj.created_by.first_name or obj.created_by.username
+
+    def get_attachment_url(self, obj: IncidentReport) -> str | None:
+        if not obj.attachment:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(obj.attachment.url)
+        return obj.attachment.url
+
+    def validate_attachment(self, value):
+        if value is None:
+            return value
+        content_type = getattr(value, "content_type", "") or ""
+        if not content_type.startswith("image/"):
+            raise serializers.ValidationError("Attachment must be an image file.")
+        return value
+
+    def create(self, validated_data):
+        sale_id = validated_data.pop("sale_id")
+        try:
+            sale = Sale.objects.get(id=sale_id)
+        except Sale.DoesNotExist as exc:
+            raise serializers.ValidationError({"sale_id": "Sale not found."}) from exc
+        return IncidentReport.objects.create(sale=sale, **validated_data)
 
 
 class PendingOrderItemSerializer(serializers.ModelSerializer):

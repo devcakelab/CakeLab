@@ -180,7 +180,6 @@ export default function DashboardView({ stats, insights, sales = [] }) {
         <MetricCard label="Low Stock" value={stats?.low_stock_count ?? 0} tone="warning" />
         <MetricCard label="Today Sales" value={stats?.today_sales ?? 0} />
         <MetricCard label="Today Revenue" value={formatCurrency(stats?.today_revenue)} tone="success" />
-        <MetricCard label="Month Revenue" value={formatCurrency(stats?.this_month_revenue)} />
         <MetricCard label="Total Revenue" value={formatCurrency(stats?.gross_revenue)} tone="success" />
       </section>
 
